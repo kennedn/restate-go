@@ -1,0 +1,10 @@
+- not_keys:
+    "ka": "power"
+    "kd": "screen_mute"
+    "ke": "volume_mute"
+    "kl": "osd_select"
+    "km": "remote_lock"
+  not_data:
+    "00": "off"
+    "01": "on"
+    "ff": "status"

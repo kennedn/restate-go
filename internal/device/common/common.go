@@ -6,16 +6,16 @@ import (
 )
 
 type Response struct {
-	Message string `json:"message"`
-	Data    any    `json:"data,omitempty"`
+	Message string `json:"message" schema:"message"`
+	Data    any    `json:"data,omitempty" schema:"data,omitempty"`
 }
 
 type Request struct {
-	Code string `json:"code"`
+	Code  string      `json:"code"`
+	Value json.Number `json:"value,omitempty"`
 }
 
 func JSONResponse(w http.ResponseWriter, httpCode int, jsonResponse []byte) {
-	// Respond to the RESTful client with the received data
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpCode)
 	w.Write(jsonResponse)

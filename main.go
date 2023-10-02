@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
-	"restate-go/router"
+	"restate-go/internal/router"
 )
 
 func main() {
