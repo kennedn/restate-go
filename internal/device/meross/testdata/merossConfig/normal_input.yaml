@@ -1,0 +1,14 @@
+apiVersion: v2
+devices:
+- type: meross
+  config:
+    name: office
+    deviceType: bulb
+    timeoutMs: 500
+    host: "test.com"
+- type: meross
+  config:
+    name: thermostat
+    deviceType: socket
+    timeoutMs: 500
+    host: "test.com"

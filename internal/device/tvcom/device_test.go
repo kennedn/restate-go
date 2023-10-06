@@ -2,6 +2,8 @@ package tvcom
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 )
 
 func setupWebsocketServer(t *testing.T, tvcom *tvcom, timeout time.Duration) *httptest.Server {
@@ -30,7 +33,7 @@ func setupWebsocketServer(t *testing.T, tvcom *tvcom, timeout time.Duration) *ht
 		// Read the message sent by the client
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
-			t.Fatalf("Failed to read message from WebSocket: %v", err)
+			return
 		}
 
 		if timeout == 1 {
@@ -62,79 +65,81 @@ func setupWebsocketServer(t *testing.T, tvcom *tvcom, timeout time.Duration) *ht
 	return server
 }
 
-func setupWebsocketServerAndOpcode(t *testing.T, testData []byte, expectedResponse []byte, timeout time.Duration) (*opcode, *httptest.Server) {
-	// Create a test WebSocket server using httptest
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Upgrade the connection to a WebSocket connection
-		upgrader := websocket.Upgrader{}
-		conn, err := upgrader.Upgrade(w, r, nil)
-		// Disable timeouts
-		conn.SetReadDeadline(time.Time{})
-		conn.SetWriteDeadline(time.Time{})
-		if err != nil {
-			t.Fatalf("Failed to upgrade connection to WebSocket: %v", err)
-		}
-		defer conn.Close()
-
-		// Read the message sent by the client
-		messageType, _, err := conn.ReadMessage()
-		if err != nil {
-			t.Fatalf("Failed to read message from WebSocket: %v", err)
-		}
-
-		if timeout == 1 {
-			time.Sleep(1 * time.Millisecond)
-		}
-
-		if err := conn.WriteMessage(messageType, expectedResponse); err != nil {
-			t.Fatalf("Failed to write response to WebSocket: %v", err)
-		}
-	}))
-
-	// Create an instance of your 'opcode' struct and set 'Tvcom.WebSocketURL' to the test server's URL
-	o := &opcode{
-		Tvcom: &tvcom{
-			WebSocketURL: "ws" + strings.TrimPrefix(server.URL, "http"),
-			Timeout:      timeout, // Set your desired timeout here
-		},
-		Code: "test_code",
-	}
-	return o, server
-}
-
 func TestWebsocketWriteWithResponse(t *testing.T) {
 	testCases := []struct {
 		name             string
-		testData         []byte
+		testCode         string
+		testData         string
 		expectedResponse []byte
 		timeout          time.Duration
 		shouldPass       bool
 	}{
 		{
-			"status",
-			[]byte("ka 00 ff\r"), []byte("a 00 OK01x"), 500, true,
+			name:             "status",
+			testCode:         "ka",
+			testData:         "ff",
+			expectedResponse: []byte("a 00 OKffx"),
+			timeout:          500,
+			shouldPass:       true,
 		},
 		{
-			"power_change_state",
-			[]byte("kc 00 01\r"), []byte("c 00 OK01x"), 500, true,
+			name:             "power_change_state",
+			testCode:         "kc",
+			testData:         "01",
+			expectedResponse: []byte("c 00 OK01x"),
+			timeout:          500,
+			shouldPass:       true,
 		},
 		{
-			"data_out_of_range",
-			[]byte("ka 00 02\r"), []byte("a 00 NG00x"), 500, false,
+			name:             "data_out_of_range",
+			testCode:         "ka",
+			testData:         "02",
+			expectedResponse: []byte(""),
+			timeout:          500,
+			shouldPass:       false,
 		},
 		{
-			"timeout",
-			[]byte("kc 00 ff\r"), []byte("a 00 OK00x"), 1, false,
+			name:             "timeout",
+			testCode:         "kc",
+			testData:         "ff",
+			expectedResponse: []byte(""),
+			timeout:          1,
+			shouldPass:       false,
+		},
+		{
+			name:             "malformed_opcode",
+			testCode:         "malformed",
+			testData:         "opcode",
+			expectedResponse: []byte(""),
+			timeout:          500,
+			shouldPass:       false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			o, server := setupWebsocketServerAndOpcode(t, tc.testData, tc.expectedResponse, tc.timeout)
+			tvcom, _, err := generateRoutesFromConfig(tc.timeout, "ws://test.com", "testdata/device_long_opcodes.yaml")
+			if err != nil {
+				t.Fatalf("generateRoutesFromConfig returned an error: %v", err)
+			}
+
+			server := setupWebsocketServer(t, tvcom, tc.timeout)
 			defer server.Close()
 
-			// Call your function with test data
-			response, err := o.websocketWriteWithResponse(string(tc.testData))
+			tvcom.WebSocketURL = "ws" + strings.TrimPrefix(server.URL, "http")
+
+			var o *opcode = nil
+			for _, op := range tvcom.Opcodes {
+				if tc.testCode == op.Code {
+					o = &op
+					break
+				}
+			}
+			if o == nil {
+				t.Fatalf("Could not locate opcode using testCode %s", tc.testCode)
+			}
+
+			response, err := o.websocketWriteWithResponse(tc.testData)
 			if err != nil && tc.shouldPass {
 				t.Fatalf("websocketWriteWithResponse returned an error: %v", err)
 			}
@@ -142,13 +147,8 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 				t.Fatalf("websocketWriteWithResponse did not error")
 			}
 
-			// Add assertions to check the response
-			if string(response) != string(tc.expectedResponse) && tc.shouldPass {
+			if string(response) != string(tc.expectedResponse) {
 				t.Errorf("Unexpected response. Expected: %s, Got: %s", string(tc.expectedResponse), response)
-			}
-			// Add assertions to check the response
-			if string(response) == string(tc.expectedResponse) && !tc.shouldPass {
-				t.Errorf("Response should not match expected. Expected: %s, Got: %s", string(tc.expectedResponse), response)
 			}
 		})
 	}
@@ -156,63 +156,60 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 
 func TestRoutes(t *testing.T) {
 	testCases := []struct {
-		name         string
-		timeout      time.Duration
-		websocketURL string
-		configPath   string
-		routeCount   int
-		errorMessage string
+		name          string
+		timeout       time.Duration
+		websocketURL  string
+		configPath    string
+		routeCount    int
+		expectedError error
 	}{
 		{
-			name:         "bad_path",
-			timeout:      500,
-			websocketURL: "ws://test.com",
-			configPath:   "non/existant/file",
-			routeCount:   0,
-			errorMessage: "no such file or directory",
+			name:          "bad_path",
+			timeout:       500,
+			websocketURL:  "ws://test.com",
+			configPath:    "non/existant/file",
+			routeCount:    0,
+			expectedError: &fs.PathError{},
 		},
 		{
-			name:         "default_config",
-			timeout:      500,
-			websocketURL: "ws://test.com",
-			configPath:   "device.yaml",
-			routeCount:   24,
-			errorMessage: "",
+			name:          "default_config",
+			timeout:       500,
+			websocketURL:  "ws://test.com",
+			configPath:    "device.yaml",
+			routeCount:    24,
+			expectedError: nil,
 		},
 		{
-			name:         "7_route_config",
-			timeout:      500,
-			websocketURL: "ws://test.com",
-			configPath:   "testdata/device_5_opcodes.yaml",
-			routeCount:   7,
-			errorMessage: "",
+			name:          "7_route_config",
+			timeout:       500,
+			websocketURL:  "ws://test.com",
+			configPath:    "testdata/5_opcodes_device.yaml",
+			routeCount:    7,
+			expectedError: nil,
 		},
 		{
-			name:         "non_yaml_config",
-			timeout:      500,
-			websocketURL: "ws://test.com",
-			configPath:   "testdata/device_malformed.yaml",
-			routeCount:   0,
-			errorMessage: "",
+			name:          "non_yaml_config",
+			timeout:       500,
+			websocketURL:  "ws://test.com",
+			configPath:    "testdata/malformed_device.yaml",
+			routeCount:    0,
+			expectedError: &yaml.TypeError{},
 		},
 		{
-			name:         "empty_yaml_config",
-			timeout:      500,
-			websocketURL: "ws://test.com",
-			configPath:   "testdata/device_0_opcodes.yaml",
-			routeCount:   0,
-			errorMessage: "No routes could be retrieved from config at path",
+			name:          "empty_yaml_config",
+			timeout:       500,
+			websocketURL:  "ws://test.com",
+			configPath:    "testdata/0_opcodes_device.yaml",
+			routeCount:    0,
+			expectedError: errors.New(""),
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			r, err := Routes(tc.timeout, tc.websocketURL, tc.configPath)
-			if err != nil {
-				assert.Containsf(t, err.Error(), tc.errorMessage, "Error should contain \"%v\", got \"%v\"", tc.errorMessage, err)
-			} else {
-				assert.Equal(t, tc.errorMessage, "", "Expected an error that contains message \"%v\", but got nil", tc.errorMessage)
-			}
+
+			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
 			if len(r) != tc.routeCount {
 				t.Fatalf("Wrong number of routes returned, Expected: %d, Got: %d", tc.routeCount, len(r))

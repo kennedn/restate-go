@@ -71,8 +71,12 @@ func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
 	}
 	defer conn.Close()
 
-	// Send data to the external device
-	err = conn.WriteMessage(websocket.TextMessage, []byte(o.Code+" 00 "+data+"\r"))
+	message := []byte(o.Code + " 00 " + data + "\r")
+	if len(message) != 9 {
+		return nil, errors.New("Constructed message did not have the expected size")
+	}
+
+	err = conn.WriteMessage(websocket.TextMessage, message)
 	if err != nil {
 		return nil, err
 	}

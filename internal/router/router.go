@@ -1,11 +1,15 @@
 package router
 
 import (
+	"log"
+	"os"
+	device "restate-go/internal/device/common"
 	"restate-go/internal/device/meross"
 	"restate-go/internal/device/tvcom"
 	router "restate-go/internal/router/common"
 
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v3"
 )
 
 func NewRouter() *mux.Router {
@@ -14,31 +18,30 @@ func NewRouter() *mux.Router {
 	var err error
 	tmpRoutes, err = tvcom.Routes(1000, "ws://192.168.1.161/", "")
 	if err != nil {
-		return nil
+		log.Fatalf("Could not read meross input")
 	}
 	routes = append(routes, tmpRoutes...)
 
-	tmpRoutes, err = meross.Routes(1000, "192.168.1.140", "office", "bulb")
+	merossConfigFile, err := os.ReadFile("./internal/device/input.yaml")
 	if err != nil {
-		return nil
+		log.Fatalf("Could not read meross input")
 	}
-	routes = append(routes, tmpRoutes...)
 
-	tmpRoutes, err = meross.Routes(1000, "192.168.1.142", "hall_up", "bulb")
-	if err != nil {
-		return nil
+	deviceConfig := device.Config{}
+
+	if err := yaml.Unmarshal(merossConfigFile, &deviceConfig); err != nil {
+		log.Fatalf("Could not read meross input")
 	}
-	routes = append(routes, tmpRoutes...)
 
-	tmpRoutes, err = meross.Routes(1000, "192.168.1.150", "thermostat", "socket")
+	tmpRoutes, err = meross.Routes(&deviceConfig, "")
 	if err != nil {
-		return nil
+		log.Fatalf("Could not read meross input")
 	}
 	routes = append(routes, tmpRoutes...)
 
 	r := mux.NewRouter()
 	for _, route := range routes {
-		r.HandleFunc(route.Path, route.Handler)
+		r.HandleFunc("/"+deviceConfig.ApiVersion+route.Path, route.Handler)
 	}
 
 	return r

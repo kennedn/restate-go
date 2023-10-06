@@ -1,0 +1,21 @@
+- keys:
+    "ka": "power"
+  data:
+    "00": "off"
+    "01": "on"
+    "ff": "status"
+- keys:
+    "kc": "aspect_ratio"
+  data:
+    "01": "4:3"
+    "02": "16:9"
+    "04": "zoom_1"
+    "05": "zoom_2"
+    "06": "original"
+    "07": "14:9"
+    "09": "just_scan"
+    "ff": "status"
+- keys:
+    "malformed": "malformed"
+  data:
+    "opcode": "on"

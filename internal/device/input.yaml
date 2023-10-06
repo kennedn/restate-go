@@ -1,0 +1,49 @@
+apiVersion: v2
+devices:
+- type: tvcom
+  config:
+    name: tvcom
+    timeoutMs: 500
+    host: "192.168.1.161"
+- type: meross
+  config:
+    name: office
+    deviceType: bulb
+    timeoutMs: 1600
+    host: "192.168.1.140"
+- type: meross
+  config:
+    name: hall_up
+    deviceType: bulb
+    timeoutMs: 1600
+    host: "192.168.1.142"
+- type: meross
+  config:
+    name: thermostat
+    deviceType: socket
+    timeoutMs: 1600
+    host: "192.168.1.150"
+- type: meross
+  config:
+    name: bedroom
+    deviceType: bulb
+    timeoutMs: 1600
+    host: "192.168.1.144"
+- type: snowdon
+  config:
+    name: snowdon
+    timeoutMs: 500
+    host: "192.168.1.160"
+- type: wol
+  config:
+    name: pc
+    timeoutMs: 500
+    host: "192.168.1.100"
+    macAddress:  "2c:f0:5d:56:40:43"
+- type: pushover
+  config:
+    name: alert
+    timeoutMs: 500
+    token: some-application-token
+    userToken: some-user-token
+    defaultTitle: "restate"

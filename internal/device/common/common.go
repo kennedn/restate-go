@@ -13,6 +13,17 @@ type Response struct {
 type Request struct {
 	Code  string      `json:"code"`
 	Value json.Number `json:"value,omitempty"`
+	Hosts string      `json:"hosts,omitempty"`
+}
+
+type Config struct {
+	ApiVersion string    `yaml:"apiVersion"`
+	Devices    []Devices `yaml:"devices"`
+}
+
+type Devices struct {
+	Type   string         `yaml:"type"`
+	Config map[string]any `yaml:"config"`
 }
 
 func JSONResponse(w http.ResponseWriter, httpCode int, jsonResponse []byte) {
