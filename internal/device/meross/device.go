@@ -1,3 +1,4 @@
+// Package meross provides an abstraction for making HTTP calls to control Meross branded smart bulbs and sockets.
 package meross
 
 import (
@@ -19,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// status is a flattened representation of the state of a Meross device, including on/off state, color, temperature, and luminance.
 type status struct {
 	Onoff       int64 `json:"onoff"`
 	RGB         int64 `json:"rgb,omitempty"`
@@ -26,11 +28,13 @@ type status struct {
 	Luminance   int64 `json:"luminance,omitempty"`
 }
 
+// namedStatus associates a devices name with its status.
 type namedStatus struct {
 	Name   string `json:"name"`
 	Status any    `json:"status"`
 }
 
+// rawStatus represents the raw status response from a Meross device.
 type rawStatus struct {
 	Payload struct {
 		All struct {
@@ -48,6 +52,7 @@ type rawStatus struct {
 	} `json:"payload"`
 }
 
+// endpoint describes a Meross device control endpoint with code, supported devices, and other properties.
 type endpoint struct {
 	Code             string   `yaml:"code"`
 	SupportedDevices []string `yaml:"supportedDevices"`
@@ -57,6 +62,7 @@ type endpoint struct {
 	Template         string   `yaml:"template"`
 }
 
+// meross represents a Meross device configuration with name, host, device type, timeout, and base configuration.
 type meross struct {
 	Name       string `yaml:"name"`
 	Host       string `yaml:"host"`
@@ -65,12 +71,14 @@ type meross struct {
 	Base       base
 }
 
+// base represents a list of Meross devices, endpoints and common configuration
 type base struct {
 	BaseTemplate string      `yaml:"baseTemplate"`
 	Endpoints    []*endpoint `yaml:"endpoints"`
 	Devices      []*meross
 }
 
+// Routes generates routes for Meross device control based on a provided configuration.
 func Routes(config *device.Config, internalConfigPath string) ([]router.Route, error) {
 	base, routes, err := generateRoutesFromConfig(config, internalConfigPath)
 	if err != nil || len(routes) == 0 {
@@ -79,21 +87,23 @@ func Routes(config *device.Config, internalConfigPath string) ([]router.Route, e
 
 	routes = append(routes, router.Route{
 		Path:    "/meross",
-		Handler: base.Handler,
+		Handler: base.handler,
 	})
 
 	routes = append(routes, router.Route{
 		Path:    "/meross/",
-		Handler: base.Handler,
+		Handler: base.handler,
 	})
 
 	return routes, nil
 }
 
+// toJsonNumber converts a numeric value to a JSON number.
 func toJsonNumber(value any) json.Number {
 	return json.Number(fmt.Sprintf("%d", value))
 }
 
+// generateRoutesFromConfig generates routes and base configuration from a provided configuration and internal config file.
 func generateRoutesFromConfig(config *device.Config, internalConfigPath string) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{}
@@ -137,7 +147,7 @@ func generateRoutesFromConfig(config *device.Config, internalConfigPath string) 
 
 		routes = append(routes, router.Route{
 			Path:    "/meross/" + meross.Name,
-			Handler: meross.Handler,
+			Handler: meross.handler,
 		})
 
 		base.Devices = append(base.Devices, &meross)
@@ -146,6 +156,7 @@ func generateRoutesFromConfig(config *device.Config, internalConfigPath string) 
 	return &base, routes, nil
 }
 
+// getCodes returns a list of control codes for a Meross device.
 func (m *meross) getCodes() []string {
 	var codes []string
 	for _, e := range m.Base.Endpoints {
@@ -154,6 +165,7 @@ func (m *meross) getCodes() []string {
 	return codes
 }
 
+// getEndpoint retrieves an endpoint configuration by its code.
 func (m *meross) getEndpoint(code string) *endpoint {
 	for _, e := range m.Base.Endpoints {
 		if code == e.Code && slices.Contains(e.SupportedDevices, m.DeviceType) {
@@ -163,6 +175,7 @@ func (m *meross) getEndpoint(code string) *endpoint {
 	return nil
 }
 
+// post constructs and sends a POST request to a Meross device and will return a flattened status when the method is equal to GET.
 func (m *meross) post(method string, endpoint endpoint, value json.Number) (*status, error) {
 	client := &http.Client{
 		Timeout: time.Duration(m.Timeout) * time.Millisecond,
@@ -218,7 +231,8 @@ func (m *meross) post(method string, endpoint endpoint, value json.Number) (*sta
 	return &response, err
 }
 
-func (m *meross) Handler(w http.ResponseWriter, r *http.Request) {
+// Handler is the HTTP handler for Meross device control.
+func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
 	var status *status
@@ -323,6 +337,7 @@ func (m *meross) Handler(w http.ResponseWriter, r *http.Request) {
 	return
 }
 
+// getDeviceNames returns the names of all Meross devices in the base configuration.
 func (b *base) getDeviceNames() []string {
 	var names []string
 	for _, d := range b.Devices {
@@ -331,6 +346,7 @@ func (b *base) getDeviceNames() []string {
 	return names
 }
 
+// getDevice retrieves a Meross device by its name.
 func (b *base) getDevice(name string) *meross {
 	for _, d := range b.Devices {
 		if d.Name == name {
@@ -340,6 +356,7 @@ func (b *base) getDevice(name string) *meross {
 	return nil
 }
 
+// multiPost performs multiple POST requests to control multiple Meross devices in parallel and returns their statuses.
 func (b *base) multiPost(devices []*meross, method string, endpoint string, value json.Number) chan *namedStatus {
 	wg := sync.WaitGroup{}
 	responses := make(chan *namedStatus, len(devices))
@@ -375,7 +392,8 @@ func (b *base) multiPost(devices []*meross, method string, endpoint string, valu
 	return responses
 }
 
-func (b *base) Handler(w http.ResponseWriter, r *http.Request) {
+// Handler is the HTTP handler for handling requests to control multiple Meross devices.
+func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
 

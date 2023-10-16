@@ -118,7 +118,7 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tvcom, _, err := generateRoutesFromConfig(tc.timeout, "ws://test.com", "testdata/device_long_opcodes.yaml")
+			tvcom, _, err := generateRoutesFromConfig(tc.timeout, "ws://test.com", "testdata/long_opcodes_device.yaml")
 			if err != nil {
 				t.Fatalf("generateRoutesFromConfig returned an error: %v", err)
 			}

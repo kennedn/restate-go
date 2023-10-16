@@ -6,6 +6,7 @@ import (
 	device "restate-go/internal/device/common"
 	"restate-go/internal/device/meross"
 	"restate-go/internal/device/tvcom"
+	"restate-go/internal/device/wol"
 	router "restate-go/internal/router/common"
 
 	"github.com/gorilla/mux"
@@ -36,6 +37,12 @@ func NewRouter() *mux.Router {
 	tmpRoutes, err = meross.Routes(&deviceConfig, "")
 	if err != nil {
 		log.Fatalf("Could not read meross input")
+	}
+	routes = append(routes, tmpRoutes...)
+
+	tmpRoutes, err = wol.Routes(&deviceConfig)
+	if err != nil {
+		log.Fatalf("Could not read wol input")
 	}
 	routes = append(routes, tmpRoutes...)
 

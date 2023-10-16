@@ -307,6 +307,14 @@ func TestMerossHandler(t *testing.T) {
 			expectedBody: `{"message":"OK"}`,
 		},
 		{
+			method:       "POST",
+			url:          "/meross/office?code=non_endpoint",
+			data:         nil,
+			serverConfig: "testdata/serverConfig/normal_bulb.yaml",
+			expectedCode: 400,
+			expectedBody: `{"message":"Invalid Parameter: code"}`,
+		},
+		{
 			method:       "GET",
 			url:          "/meross/office",
 			data:         nil,

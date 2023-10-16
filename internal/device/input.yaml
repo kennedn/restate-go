@@ -37,9 +37,15 @@ devices:
 - type: wol
   config:
     name: pc
-    timeoutMs: 500
+    timeoutMs: 100
     host: "192.168.1.100"
     macAddress:  "2c:f0:5d:56:40:43"
+- type: wol
+  config:
+    name: shitcube
+    timeoutMs: 100
+    host: "192.168.1.101"
+    macAddress:  "e0:d5:5e:3c:2f:6c"
 - type: pushover
   config:
     name: alert

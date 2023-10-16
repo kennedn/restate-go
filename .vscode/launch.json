@@ -9,14 +9,37 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "main.go"
+            "program": "main.go",
+            "console": "integratedTerminal",
+            "env": {
+                "PATH": "$PATH:/usr/local/go/bin"
+            },
+            "asRoot": true
         },
         {
-            "name": "Test Current File",
+            "name": "Debug Current File",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PATH": "$PATH:/usr/local/go/bin"
+            },
+            "asRoot": true
+        },
+        {
+            "name": "Debug Test",
             "type": "go",
             "request": "launch",
             "mode": "test",
-            "program": "${file}"
+            "program": "${fileDirname}",
+            "console": "integratedTerminal",
+            "env": {
+                "PATH": "$PATH:/usr/local/go/bin"
+            },
+            "asRoot": true,
+            "args": ["^TestPing$"]
         }
     ]
 }
