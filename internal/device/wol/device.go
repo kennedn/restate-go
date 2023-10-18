@@ -32,22 +32,8 @@ type base struct {
 }
 
 func Routes(config *device.Config) ([]router.Route, error) {
-	base, routes, err := generateRoutesFromConfig(config)
-	if err != nil || len(routes) == 0 {
-		return []router.Route{}, err
-	}
-
-	routes = append(routes, router.Route{
-		Path:    "/wol",
-		Handler: base.handler,
-	})
-
-	routes = append(routes, router.Route{
-		Path:    "/wol/",
-		Handler: base.handler,
-	})
-
-	return routes, nil
+	_, routes, err := generateRoutesFromConfig(config)
+	return routes, err
 }
 
 // generateRoutesFromConfig generates routes and base configuration from a provided configuration and internal config file.
@@ -89,6 +75,20 @@ func generateRoutesFromConfig(config *device.Config) (*base, []router.Route, err
 
 		base.devices = append(base.devices, &wol)
 	}
+
+	if len(routes) == 0 {
+		return nil, []router.Route{}, nil
+	}
+
+	routes = append(routes, router.Route{
+		Path:    "/wol",
+		Handler: base.handler,
+	})
+
+	routes = append(routes, router.Route{
+		Path:    "/wol/",
+		Handler: base.handler,
+	})
 
 	return &base, routes, nil
 }

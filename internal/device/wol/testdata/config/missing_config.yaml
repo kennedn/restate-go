@@ -1,0 +1,6 @@
+apiVersion: v2
+devices:
+- type: wol
+  config:
+- type: wol
+  config:

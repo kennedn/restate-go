@@ -1,0 +1,12 @@
+apiVersion: v2
+devices:
+- type: wol
+  config:
+    name: pc
+    timeoutMs: 100
+    macAddress:  "2c:f0:5d:56:40:43"
+- type: wol
+  config:
+    name: shitcube
+    timeoutMs: 100
+    host: "192.168.1.101"

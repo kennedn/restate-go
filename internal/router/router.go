@@ -5,6 +5,7 @@ import (
 	"os"
 	device "restate-go/internal/device/common"
 	"restate-go/internal/device/meross"
+	"restate-go/internal/device/snowdon"
 	"restate-go/internal/device/tvcom"
 	"restate-go/internal/device/wol"
 	router "restate-go/internal/router/common"
@@ -41,6 +42,12 @@ func NewRouter() *mux.Router {
 	routes = append(routes, tmpRoutes...)
 
 	tmpRoutes, err = wol.Routes(&deviceConfig)
+	if err != nil {
+		log.Fatalf("Could not read wol input")
+	}
+	routes = append(routes, tmpRoutes...)
+
+	tmpRoutes, err = snowdon.Routes(&deviceConfig)
 	if err != nil {
 		log.Fatalf("Could not read wol input")
 	}

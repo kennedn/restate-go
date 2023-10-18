@@ -1,0 +1,15 @@
+apiVersion: v2
+devices:
+- type: not_wol
+- type: wol
+  config:
+    name: test1
+    timeoutMs: 100
+    host: "127.0.0.1"
+    macAddress:  "00:11:22:33:44:55"
+- type: wol
+  config:
+    name: test2
+    timeoutMs: 100
+    host: "127.0.0.2"
+    macAddress:  "00:11:22:33:44:56"

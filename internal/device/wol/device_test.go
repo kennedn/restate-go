@@ -1,16 +1,22 @@
 package wol
 
 import (
+	"bytes"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	device "restate-go/internal/device/common"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"gopkg.in/yaml.v3"
 )
 
 type mockPacketConn struct {
@@ -271,6 +277,268 @@ func TestPing(t *testing.T) {
 
 			assert.Equal(t, expectedMessage, message, "Message does not match expected value")
 
+		})
+	}
+}
+
+func TestRoutes(t *testing.T) {
+	testCases := []struct {
+		name          string
+		configPath    string
+		routeCount    int
+		expectedError error
+	}{
+		{
+			name:          "wol_normal_config",
+			configPath:    "testdata/config/normal_input.yaml",
+			routeCount:    4,
+			expectedError: nil,
+		},
+		{
+			name:          "wol_empty_yaml_config",
+			configPath:    "testdata/config/empty_yaml_config.yaml",
+			routeCount:    0,
+			expectedError: nil,
+		},
+		{
+			name:          "wol_empty_yaml_config",
+			configPath:    "testdata/config/empty_yaml_config.yaml",
+			routeCount:    0,
+			expectedError: nil,
+		},
+		{
+			name:          "wol_missing_config",
+			configPath:    "testdata/config/missing_config.yaml",
+			routeCount:    0,
+			expectedError: errors.New(""),
+		},
+		{
+			name:          "wol_missing_config_parameter",
+			configPath:    "testdata/config/missing_config_parameter.yaml",
+			routeCount:    0,
+			expectedError: errors.New(""),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			merossConfigFile, err := os.ReadFile(tc.configPath)
+			if err != nil {
+				t.Fatalf("Could not read meross input")
+			}
+
+			merossConfig := device.Config{}
+
+			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
+				t.Fatalf("Could not read meross input")
+			}
+			r, err := Routes(&merossConfig)
+
+			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
+
+			if len(r) != tc.routeCount {
+				t.Fatalf("Wrong number of routes returned, Expected: %d, Got: %d", tc.routeCount, len(r))
+			}
+
+		})
+	}
+}
+
+func TestWolHandler(t *testing.T) {
+	testCases := []struct {
+		name         string
+		method       string
+		url          string
+		data         []byte
+		writeError   error
+		readError    error
+		expectedCode int
+		expectedBody string
+	}{
+		{
+			name:         "status_no_error",
+			method:       "POST",
+			url:          "/wol/test1?code=status",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 200,
+			expectedBody: `{"message":"OK","data":"on"}`,
+		},
+		{
+			name:         "status_read_timeout_error",
+			method:       "POST",
+			url:          "/wol/test1?code=status",
+			data:         nil,
+			readError:    &TimeoutError{},
+			writeError:   nil,
+			expectedCode: 200,
+			expectedBody: `{"message":"OK","data":"off"}`,
+		},
+		{
+			name:         "status_write_timeout_error",
+			method:       "POST",
+			url:          "/wol/test2",
+			data:         []byte(`{"code": "status"}`),
+			readError:    nil,
+			writeError:   &TimeoutError{},
+			expectedCode: 200,
+			expectedBody: `{"message":"OK","data":"off"}`,
+		},
+		{
+			name:         "status_read_unknown_error",
+			method:       "POST",
+			url:          "/wol/test1?code=status",
+			data:         nil,
+			readError:    errors.New(""),
+			writeError:   nil,
+			expectedCode: 500,
+			expectedBody: `{"message":"Internal Server Error"}`,
+		},
+		{
+			name:         "power_no_error",
+			method:       "POST",
+			url:          "/wol/test1?code=power",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 200,
+			expectedBody: `{"message":"OK"}`,
+		},
+		{
+			name:         "power_timeout_write_error",
+			method:       "POST",
+			url:          "/wol/test2",
+			data:         []byte(`{"code": "power"}`),
+			readError:    nil,
+			writeError:   &TimeoutError{},
+			expectedCode: 500,
+			expectedBody: `{"message":"Internal Server Error"}`,
+		},
+		{
+			name:         "get_device_request",
+			method:       "GET",
+			url:          "/wol/test1",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 200,
+			expectedBody: `{"message":"OK","data":["power","status"]}`,
+		},
+		{
+			name:         "get_base_request",
+			method:       "GET",
+			url:          "/wol/",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 200,
+			expectedBody: `{"message":"OK","data":["test1","test2"]}`,
+		},
+		{
+			name:         "unsupported_device_method",
+			method:       "DELETE",
+			url:          "/wol/test1",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 405,
+			expectedBody: `{"message":"Method Not Allowed"}`,
+		},
+		{
+			name:         "unsupported_base_method",
+			method:       "POST",
+			url:          "/wol/",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 405,
+			expectedBody: `{"message":"Method Not Allowed"}`,
+		},
+		{
+			name:         "malformed_json_body",
+			method:       "POST",
+			url:          "/wol/test1",
+			data:         []byte(`not_json`),
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 400,
+			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
+		},
+		{
+			name:         "malformed_query_string",
+			method:       "POST",
+			url:          "/wol/test1?monkeytest",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 400,
+			expectedBody: `{"message":"Malformed or empty query string"}`,
+		},
+		{
+			name:         "unsupported_code_variable",
+			method:       "POST",
+			url:          "/wol/test1?code=monkey",
+			data:         nil,
+			readError:    nil,
+			writeError:   nil,
+			expectedCode: 400,
+			expectedBody: `{"message":"Invalid Parameter: code"}`,
+		},
+	}
+
+	wolConfigFile, err := os.ReadFile("testdata/config/normal_input.yaml")
+	if err != nil {
+		t.Fatalf("Could not read wol input")
+	}
+
+	wolConfig := device.Config{}
+
+	if err := yaml.Unmarshal(wolConfigFile, &wolConfig); err != nil {
+		t.Fatalf("Could not read wol input")
+	}
+
+	base, routes, err := generateRoutesFromConfig(&wolConfig)
+
+	if err != nil {
+		t.Fatalf("generateRoutesFromConfig returned an error: %v", err)
+	}
+	router := mux.NewRouter()
+	for _, r := range routes {
+		router.HandleFunc(r.Path, r.Handler)
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockConn := &mockPacketConn{
+				writeToFunc: func(b []byte, addr net.Addr) (int, error) {
+					return 0, tc.writeError
+				},
+				readFunc: func(b []byte) (int, net.Addr, error) {
+					return 0, nil, tc.readError
+				},
+			}
+			for i, _ := range base.devices {
+				base.devices[i].conn = mockConn
+			}
+			recorder := httptest.NewRecorder()
+
+			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
+			if tc.data != nil {
+				headers := make(http.Header)
+				headers.Add("Content-Type", "application/json")
+				request.Header = headers
+			}
+
+			router.ServeHTTP(recorder, request)
+
+			if recorder.Code != tc.expectedCode {
+				t.Errorf("Unexpected HTTP status code. Expected: %d, Got: %d", tc.expectedCode, recorder.Code)
+			}
+
+			if recorder.Body.String() != tc.expectedBody {
+				t.Errorf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
+			}
 		})
 	}
 }

@@ -32,7 +32,7 @@ devices:
 - type: snowdon
   config:
     name: snowdon
-    timeoutMs: 500
+    timeoutMs: 10000
     host: "192.168.1.160"
 - type: wol
   config:
