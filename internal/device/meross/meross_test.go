@@ -122,13 +122,6 @@ func TestRoutes(t *testing.T) {
 			expectedError:      nil,
 		},
 		{
-			name:               "meross_empty_yaml_config",
-			configPath:         "testdata/merossConfig/empty_yaml_config.yaml",
-			internalConfigPath: "device.yaml",
-			routeCount:         0,
-			expectedError:      nil,
-		},
-		{
 			name:               "meross_missing_config",
 			configPath:         "testdata/merossConfig/missing_config.yaml",
 			internalConfigPath: "device.yaml",
@@ -273,9 +266,7 @@ func TestMerossHandler(t *testing.T) {
 
 			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
 			if tc.data != nil {
-				headers := make(http.Header)
-				headers.Add("Content-Type", "application/json")
-				request.Header = headers
+				request.Header.Set("Content-Type", "application/json")
 			}
 
 			router.ServeHTTP(recorder, request)

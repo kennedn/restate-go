@@ -361,9 +361,7 @@ func TestOpcodeHandler(t *testing.T) {
 
 			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
 			if tc.data != nil {
-				headers := make(http.Header)
-				headers.Add("Content-Type", "application/json")
-				request.Header = headers
+				request.Header.Set("Content-Type", "application/json")
 			}
 
 			router.ServeHTTP(recorder, request)

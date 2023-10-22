@@ -1,0 +1,25 @@
+codes:
+- code: power
+  method: PUT
+  httpCode: 200
+  json: '{"status": "ok"}'
+- code: status
+  method: PUT
+  httpCode: 200
+  json: '{"onoff": "on", "input": "aux"}'
+- code: ""
+  method: GET
+  httpCode: 200
+  json: '{"code": ["status", "power", "mute", "volume_up", "volume_down", "previous", "next", "play_pause", "input", "treble_up", "treble_down", "bass_up", "bass_down", "pair", "flat", "music", "dialog", "movie"]}'
+- code: monkey
+  method: PUT
+  httpCode: 400
+  json: '{"message": "code not recognised"}'
+- code: test
+  method: POST
+  httpCode: 500
+  json: '{"message": "HTTP method not supported"}'
+- code: error
+  method: PUT
+  httpCode: 500
+  json: '{"status": "ng"}'

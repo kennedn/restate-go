@@ -1,0 +1,6 @@
+apiVersion: v2
+devices:
+- type: alert
+  config:
+- type: alert
+  config:

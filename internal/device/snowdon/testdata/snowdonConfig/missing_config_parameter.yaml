@@ -1,0 +1,10 @@
+apiVersion: v2
+devices:
+- type: snowdon
+  config:
+    name: test1
+    timeoutMs: 10000
+- type: snowdon
+  config:
+    timeoutMs: 10000
+    host: "127.0.0.2:8080"

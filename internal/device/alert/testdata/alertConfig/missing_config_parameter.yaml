@@ -1,0 +1,12 @@
+apiVersion: v2
+devices:
+- type: alert
+  config:
+    name: test1
+    timeoutMs: 5000
+    token: testToken
+- type: alert
+  config:
+    name: test2
+    timeoutMs: 5000
+    user: testUser

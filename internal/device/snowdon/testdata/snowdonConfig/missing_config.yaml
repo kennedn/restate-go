@@ -1,0 +1,6 @@
+apiVersion: v2
+devices:
+- type: snowdon
+  config:
+- type: snowdon
+  config:
