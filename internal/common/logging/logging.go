@@ -59,7 +59,10 @@ func RequestLogger(h http.Handler) http.Handler {
 		}
 
 		h.ServeHTTP(recorder, r)
-		clientIP := strings.Split(r.RemoteAddr, ":")[0]
+        clientIP := r.Header.Get("X-Origin")
+        if clientIP == "" {
+            clientIP = strings.Split(r.RemoteAddr, ":")[0]
+        }
 		method := r.Method
 		user := r.URL.User.Username()
 		path := r.URL.RequestURI()
