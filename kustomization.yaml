@@ -1,0 +1,23 @@
+resources:
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+
+namespace: default
+
+commonLabels:
+    app: restate-go
+
+secretGenerator:
+- name: restate-go-basic-auth
+  behavior: create
+  options:
+    disableNameSuffixHash: true
+  files:
+  - auth=config/htpasswd
+- name: restate-go-config
+  behavior: create
+  options:
+    disableNameSuffixHash: true
+  files:
+  - config.yaml=config/config.yaml

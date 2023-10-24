@@ -3,14 +3,27 @@ package main
 import (
 	"log"
 	"net/http"
-	"restate-go/internal/router"
+	"os"
+
+	"github.com/kennedn/restate-go/internal/common/logging"
+	"github.com/kennedn/restate-go/internal/device"
+	"github.com/kennedn/restate-go/internal/router"
 )
 
 func main() {
-	r := router.NewRouter()
+
+	devices := &device.Devices{}
+
+	routes, err := devices.Routes()
+	if err != nil {
+		logging.Log(logging.Error, "Failed to start server: %v", err)
+		os.Exit(1)
+	}
+
+	r := router.NewRouter(routes)
 	if r == nil {
 		log.Fatal("failed to create router")
 	}
-	log.Println("Server listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	logging.Log(logging.Info, "Server listening on :8080")
+	logging.Log(logging.Error, http.ListenAndServe(":8080", r).Error())
 }

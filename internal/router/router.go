@@ -1,69 +1,22 @@
 package router
 
 import (
-	"log"
-	"os"
-	"restate-go/internal/device/alert"
-	device "restate-go/internal/device/common"
-	"restate-go/internal/device/meross"
-	"restate-go/internal/device/snowdon"
-	"restate-go/internal/device/tvcom"
-	"restate-go/internal/device/wol"
-	router "restate-go/internal/router/common"
+	"github.com/kennedn/restate-go/internal/common/logging"
+	router "github.com/kennedn/restate-go/internal/router/common"
 
 	"github.com/gorilla/mux"
-	"gopkg.in/yaml.v3"
 )
 
-func NewRouter() *mux.Router {
+func NewRouter(routes []router.Route) *mux.Router {
 
-	var routes, tmpRoutes []router.Route
-	var err error
-	tmpRoutes, err = tvcom.Routes(1000, "ws://192.168.1.161/", "")
-	if err != nil {
-		log.Fatalf("Could not read meross input")
-	}
-	routes = append(routes, tmpRoutes...)
+	router := mux.NewRouter()
 
-	merossConfigFile, err := os.ReadFile("./internal/device/input.yaml")
-	if err != nil {
-		log.Fatalf("Could not read meross input")
-	}
+	// Enable logging middleware
+	router.Use(logging.RequestLogger)
 
-	deviceConfig := device.Config{}
-
-	if err := yaml.Unmarshal(merossConfigFile, &deviceConfig); err != nil {
-		log.Fatalf("Could not read meross input")
-	}
-
-	tmpRoutes, err = meross.Routes(&deviceConfig, "")
-	if err != nil {
-		log.Fatalf("Could not read meross input")
-	}
-	routes = append(routes, tmpRoutes...)
-
-	tmpRoutes, err = wol.Routes(&deviceConfig)
-	if err != nil {
-		log.Fatalf("Could not read wol input")
-	}
-	routes = append(routes, tmpRoutes...)
-
-	tmpRoutes, err = snowdon.Routes(&deviceConfig)
-	if err != nil {
-		log.Fatalf("Could not read snowdon input")
-	}
-	routes = append(routes, tmpRoutes...)
-
-	tmpRoutes, err = alert.Routes(&deviceConfig)
-	if err != nil {
-		log.Fatalf("Could not read alert input")
-	}
-	routes = append(routes, tmpRoutes...)
-
-	r := mux.NewRouter()
 	for _, route := range routes {
-		r.HandleFunc("/"+deviceConfig.ApiVersion+route.Path, route.Handler)
+		router.HandleFunc(route.Path, route.Handler)
 	}
 
-	return r
+	return router
 }

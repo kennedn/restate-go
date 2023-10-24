@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"time"
 
-	"restate-go/internal/common/logging"
-	device "restate-go/internal/device/common"
-	router "restate-go/internal/router/common"
+	"github.com/kennedn/restate-go/internal/common/logging"
+	device "github.com/kennedn/restate-go/internal/device/common"
+	router "github.com/kennedn/restate-go/internal/router/common"
 
 	"github.com/gorilla/schema"
 	"golang.org/x/text/cases"
@@ -37,7 +37,9 @@ type base struct {
 	Devices []*snowdon
 }
 
-func Routes(config *device.Config) ([]router.Route, error) {
+type Device struct{}
+
+func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
 	_, routes, err := routes(config)
 	return routes, err
 }
@@ -56,11 +58,13 @@ func routes(config *device.Config) (*base, []router.Route, error) {
 
 		yamlConfig, err := yaml.Marshal(d.Config)
 		if err != nil {
-			return nil, []router.Route{}, err
+			logging.Log(logging.Info, "Unable to marshal device config")
+			continue
 		}
 
 		if err := yaml.Unmarshal(yamlConfig, &snowdon); err != nil {
-			return nil, []router.Route{}, err
+			logging.Log(logging.Info, "Unable to unmarshal device config")
+			continue
 		}
 
 		if snowdon.Name == "" || snowdon.Host == "" {
@@ -74,17 +78,16 @@ func routes(config *device.Config) (*base, []router.Route, error) {
 		})
 
 		base.Devices = append(base.Devices, &snowdon)
+
+		logging.Log(logging.Info, "Found device \"%s\"", snowdon.Name)
 	}
 
 	if len(routes) == 0 {
-		logging.Log(logging.Info, "No routes found in config")
-		return nil, []router.Route{}, errors.New("No routes found in config")
+		return nil, []router.Route{}, errors.New("no routes generated from config")
 	} else if len(routes) == 1 {
-		logging.Log(logging.Info, "Single device detected")
 		return &base, routes, nil
 	}
 
-	logging.Log(logging.Info, "Multiple devices detected")
 	for i, r := range routes {
 		routes[i].Path = "/snowdon" + r.Path
 	}
@@ -215,6 +218,4 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpCode, jsonResponse = device.SetJSONResponse(http.StatusMethodNotAllowed, "Method Not Allowed", nil)
-	return
-
 }

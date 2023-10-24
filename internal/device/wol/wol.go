@@ -3,13 +3,14 @@ package wol
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
-	device "restate-go/internal/device/common"
-	router "restate-go/internal/router/common"
 	"time"
+
+	"github.com/kennedn/restate-go/internal/common/logging"
+	device "github.com/kennedn/restate-go/internal/device/common"
+	router "github.com/kennedn/restate-go/internal/router/common"
 
 	"github.com/gorilla/schema"
 	"golang.org/x/net/icmp"
@@ -31,13 +32,14 @@ type base struct {
 	udpAddr *net.UDPAddr
 }
 
-func Routes(config *device.Config) ([]router.Route, error) {
-	_, routes, err := generateRoutesFromConfig(config)
+type Device struct{}
+
+func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
+	_, routes, err := routes(config)
 	return routes, err
 }
 
-// generateRoutesFromConfig generates routes and base configuration from a provided configuration and internal config file.
-func generateRoutesFromConfig(config *device.Config) (*base, []router.Route, error) {
+func routes(config *device.Config) (*base, []router.Route, error) {
 	routes := []router.Route{}
 
 	base := base{
@@ -57,15 +59,18 @@ func generateRoutesFromConfig(config *device.Config) (*base, []router.Route, err
 
 		yamlConfig, err := yaml.Marshal(d.Config)
 		if err != nil {
-			return nil, []router.Route{}, err
+			logging.Log(logging.Info, "Unable to marshal device config")
+			continue
 		}
 
 		if err := yaml.Unmarshal(yamlConfig, &wol); err != nil {
-			return nil, []router.Route{}, err
+			logging.Log(logging.Info, "Unable to unmarshal device config")
+			continue
 		}
 
 		if wol.Name == "" || wol.Host == "" || wol.MacAddress == "" {
-			return nil, []router.Route{}, fmt.Errorf("Unable to load device due to missing parameters")
+			logging.Log(logging.Info, "Unable to load device due to missing parameters")
+			continue
 		}
 
 		routes = append(routes, router.Route{
@@ -74,10 +79,14 @@ func generateRoutesFromConfig(config *device.Config) (*base, []router.Route, err
 		})
 
 		base.devices = append(base.devices, &wol)
+
+		logging.Log(logging.Info, "Found device \"%s\"", wol.Name)
 	}
 
 	if len(routes) == 0 {
-		return nil, []router.Route{}, nil
+		return nil, []router.Route{}, errors.New("no routes generated from config")
+	} else if len(routes) == 1 {
+		return &base, routes, nil
 	}
 
 	routes = append(routes, router.Route{

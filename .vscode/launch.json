@@ -12,7 +12,7 @@
             "program": "main.go",
             "console": "integratedTerminal",
             "env": {
-                "PATH": "$PATH:/usr/local/go/bin"
+                "PATH": "$PATH:/usr/local/go/bin",
             },
             "asRoot": true
         },

@@ -6,10 +6,11 @@ import (
 	"net"
 	"net/http/httptest"
 	"os"
-	device "restate-go/internal/device/common"
 	"slices"
 	"testing"
 	"time"
+
+	device "github.com/kennedn/restate-go/internal/device/common"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -297,13 +298,7 @@ func TestRoutes(t *testing.T) {
 			name:          "wol_empty_yaml_config",
 			configPath:    "testdata/config/empty_yaml_config.yaml",
 			routeCount:    0,
-			expectedError: nil,
-		},
-		{
-			name:          "wol_empty_yaml_config",
-			configPath:    "testdata/config/empty_yaml_config.yaml",
-			routeCount:    0,
-			expectedError: nil,
+			expectedError: errors.New(""),
 		},
 		{
 			name:          "wol_missing_config",
@@ -331,7 +326,10 @@ func TestRoutes(t *testing.T) {
 			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
 				t.Fatalf("Could not read meross input")
 			}
-			r, err := Routes(&merossConfig)
+
+			device := &Device{}
+
+			r, err := device.Routes(&merossConfig)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
@@ -497,7 +495,7 @@ func TestWolHandler(t *testing.T) {
 		t.Fatalf("Could not read wol input")
 	}
 
-	base, routes, err := generateRoutesFromConfig(&wolConfig)
+	base, routes, err := routes(&wolConfig)
 
 	if err != nil {
 		t.Fatalf("generateRoutesFromConfig returned an error: %v", err)

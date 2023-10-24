@@ -6,9 +6,13 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kennedn/restate-go/internal/common/logging"
+	device "github.com/kennedn/restate-go/internal/device/common"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -16,7 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func setupWebsocketServer(t *testing.T, tvcom *tvcom, timeout time.Duration) *httptest.Server {
+func setupWebsocketServer(t *testing.T, tvcom *tvcom, timeout uint) *httptest.Server {
 	// Create a test WebSocket server using httptest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Upgrade the connection to a WebSocket connection
@@ -66,12 +70,14 @@ func setupWebsocketServer(t *testing.T, tvcom *tvcom, timeout time.Duration) *ht
 }
 
 func TestWebsocketWriteWithResponse(t *testing.T) {
+	logging.SetLogLevel(logging.Error)
+
 	testCases := []struct {
 		name             string
 		testCode         string
 		testData         string
 		expectedResponse []byte
-		timeout          time.Duration
+		timeout          uint
 		shouldPass       bool
 	}{
 		{
@@ -118,15 +124,29 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			tvcom, _, err := generateRoutesFromConfig(tc.timeout, "ws://test.com", "testdata/long_opcodes_device.yaml")
+			tvcomConfigFile, err := os.ReadFile("testdata/tvcomConfig/single_device_config.yaml")
 			if err != nil {
-				t.Fatalf("generateRoutesFromConfig returned an error: %v", err)
+				t.Fatalf("Could not read tvcom input")
 			}
+
+			tvcomConfig := device.Config{}
+
+			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
+				t.Fatalf("Could not read tvcom input")
+			}
+			base, _, err := routes(&tvcomConfig, "testdata/baseConfig/long_opcodes_device.yaml")
+			if err != nil {
+				t.Fatalf("routes returned an error: %v", err)
+			}
+
+			tvcom := base.Devices[0]
+
+			tvcom.Timeout = tc.timeout
 
 			server := setupWebsocketServer(t, tvcom, tc.timeout)
 			defer server.Close()
 
-			tvcom.WebSocketURL = "ws" + strings.TrimPrefix(server.URL, "http")
+			tvcom.Host = strings.TrimPrefix(server.URL, "http://")
 
 			var o *opcode = nil
 			for _, op := range tvcom.Opcodes {
@@ -155,59 +175,87 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 }
 
 func TestRoutes(t *testing.T) {
+	logging.SetLogLevel(logging.Error)
+
 	testCases := []struct {
-		name          string
-		timeout       time.Duration
-		websocketURL  string
-		configPath    string
-		routeCount    int
-		expectedError error
+		name               string
+		configPath         string
+		internalConfigPath string
+		routeCount         int
+		expectedError      error
 	}{
 		{
-			name:          "bad_path",
-			timeout:       500,
-			websocketURL:  "ws://test.com",
-			configPath:    "non/existant/file",
-			routeCount:    0,
-			expectedError: &fs.PathError{},
+			name:               "default_config",
+			configPath:         "testdata/tvcomConfig/normal_config.yaml",
+			internalConfigPath: "device.yaml",
+			routeCount:         50,
+			expectedError:      nil,
 		},
 		{
-			name:          "default_config",
-			timeout:       500,
-			websocketURL:  "ws://test.com",
-			configPath:    "device.yaml",
-			routeCount:    24,
-			expectedError: nil,
+			name:               "base_bad_path",
+			configPath:         "testdata/tvcomConfig/normal_config.yaml",
+			internalConfigPath: "non/existant/file",
+			routeCount:         0,
+			expectedError:      &fs.PathError{},
 		},
 		{
-			name:          "7_route_config",
-			timeout:       500,
-			websocketURL:  "ws://test.com",
-			configPath:    "testdata/5_opcodes_device.yaml",
-			routeCount:    7,
-			expectedError: nil,
+			name:               "base_0_endpoints",
+			configPath:         "testdata/tvcomConfig/normal_config.yaml",
+			internalConfigPath: "testdata/baseConfig/0_opcodes_device.yaml",
+			routeCount:         0,
+			expectedError:      errors.New(""),
 		},
 		{
-			name:          "non_yaml_config",
-			timeout:       500,
-			websocketURL:  "ws://test.com",
-			configPath:    "testdata/malformed_device.yaml",
-			routeCount:    0,
-			expectedError: &yaml.TypeError{},
+			name:               "base_non_yaml_config",
+			configPath:         "testdata/tvcomConfig/normal_config.yaml",
+			internalConfigPath: "testdata/baseConfig/non_yaml_config.yaml",
+			routeCount:         0,
+			expectedError:      &yaml.TypeError{},
 		},
 		{
-			name:          "empty_yaml_config",
-			timeout:       500,
-			websocketURL:  "ws://test.com",
-			configPath:    "testdata/0_opcodes_device.yaml",
-			routeCount:    0,
-			expectedError: errors.New(""),
+			name:               "base_empty_yaml_config",
+			configPath:         "testdata/tvcomConfig/normal_config.yaml",
+			internalConfigPath: "testdata/baseConfig/empty_yaml_config.yaml",
+			routeCount:         0,
+			expectedError:      &fs.PathError{},
+		},
+		{
+			name:               "tvcom_empty_yaml_config",
+			configPath:         "testdata/tvcomConfig/empty_yaml_config.yaml",
+			internalConfigPath: "device.yaml",
+			routeCount:         0,
+			expectedError:      errors.New(""),
+		},
+		{
+			name:               "tvcom_missing_config",
+			configPath:         "testdata/tvcomConfig/missing_config.yaml",
+			internalConfigPath: "device.yaml",
+			routeCount:         0,
+			expectedError:      errors.New(""),
+		},
+		{
+			name:               "tvcom_missing_config_parameter",
+			configPath:         "testdata/tvcomConfig/missing_config_parameter.yaml",
+			internalConfigPath: "device.yaml",
+			routeCount:         0,
+			expectedError:      errors.New(""),
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := Routes(tc.timeout, tc.websocketURL, tc.configPath)
+			tvcomConfigFile, err := os.ReadFile(tc.configPath)
+			if err != nil {
+				t.Fatalf("Could not read tvcom input")
+			}
+
+			tvcomConfig := device.Config{}
+
+			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
+				t.Fatalf("Could not read tvcom input")
+			}
+
+			_, r, err := routes(&tvcomConfig, tc.internalConfigPath)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
@@ -219,144 +267,157 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
-func TestTvcomHandler(t *testing.T) {
+func TestHandlers(t *testing.T) {
+	logging.SetLogLevel(logging.Error)
 	testCases := []struct {
 		name         string
 		method       string
 		url          string
 		data         []byte
+		tvcomConfig  string
 		expectedCode int
 		expectedBody string
 	}{
 		{
-			name:         "GET_/tvcom",
-			method:       "GET",
-			url:          "/tvcom",
-			data:         nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":["abnormal_state","add_skip","aspect_ratio","auto_configure_vga","backlight_lcd","balance","brightness","colour","colour_temp","contrast","input_select","ir_key","ism_method_plasma","osd_select","power","power_saving_plasma","remote_lock","screen_mute","sharpness","tint","volume","volume_mute"]}`,
-		},
-		{
-			name:         "GET_/tvcom/",
-			method:       "GET",
-			url:          "/tvcom/",
-			data:         nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":["abnormal_state","add_skip","aspect_ratio","auto_configure_vga","backlight_lcd","balance","brightness","colour","colour_temp","contrast","input_select","ir_key","ism_method_plasma","osd_select","power","power_saving_plasma","remote_lock","screen_mute","sharpness","tint","volume","volume_mute"]}`,
-		},
-		{
-			name:         "POST_/tvcom",
+			name:         "no_error",
 			method:       "POST",
-			url:          "/tvcom",
+			url:          "/tvcom/test1/power?code=on",
 			data:         nil,
-			expectedCode: 405,
-			expectedBody: `{"message":"Method Not Allowed"}`,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
+			expectedCode: 200,
+			expectedBody: `{"message":"OK"}`,
 		},
-	}
-
-	routes, err := Routes(500, "ws://test.com", "device.yaml")
-	if err != nil {
-		t.Fatalf("Routes returned an error: %v", err)
-	}
-	router := mux.NewRouter()
-	for _, r := range routes {
-		router.HandleFunc(r.Path, r.Handler)
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-
-			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
-
-			router.ServeHTTP(recorder, request)
-
-			if recorder.Code != tc.expectedCode {
-				t.Errorf("Unexpected HTTP status code. Expected: %d, Got: %d", tc.expectedCode, recorder.Code)
-			}
-
-			if recorder.Body.String() != tc.expectedBody {
-				t.Errorf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
-			}
-		})
-	}
-}
-
-func TestOpcodeHandler(t *testing.T) {
-	testCases := []struct {
-		method       string
-		url          string
-		data         []byte
-		expectedCode int
-		expectedBody string
-	}{
 		{
+			name:         "no_error_json",
 			method:       "POST",
-			url:          "/tvcom/power?code=status",
-			data:         nil,
+			url:          "/tvcom/test2/power",
+			data:         []byte(`{"code": "status"}`),
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
 			expectedCode: 200,
 			expectedBody: `{"message":"OK","data":"status"}`,
 		},
 		{
+			name:         "get_device_request",
 			method:       "GET",
-			url:          "/tvcom/power",
+			url:          "/tvcom/test1",
 			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
+			expectedCode: 200,
+			expectedBody: `{"message":"OK","data":["abnormal_state","add_skip","aspect_ratio","auto_configure_vga","backlight_lcd","balance","brightness","colour","colour_temp","contrast","input_select","ir_key","ism_method_plasma","osd_select","power","power_saving_plasma","remote_lock","screen_mute","sharpness","tint","volume","volume_mute"]}`,
+		},
+		{
+			name:         "unsupported_device_method",
+			method:       "POST",
+			url:          "/tvcom/test1",
+			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
+			expectedCode: 405,
+			expectedBody: `{"message":"Method Not Allowed"}`,
+		},
+		{
+			name:         "unsupported_opcode_method",
+			method:       "DELETE",
+			url:          "/tvcom/test2/power",
+			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
+			expectedCode: 405,
+			expectedBody: `{"message":"Method Not Allowed"}`,
+		},
+		{
+			name:         "get_opcode_request",
+			method:       "GET",
+			url:          "/tvcom/test2/power",
+			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
 			expectedCode: 200,
 			expectedBody: `{"message":"OK","data":["off","on","status"]}`,
 		},
 		{
-			method:       "DELETE",
-			url:          "/tvcom/power",
+			name:         "get_base_request",
+			method:       "GET",
+			url:          "/tvcom/",
 			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
+			expectedCode: 200,
+			expectedBody: `{"message":"OK","data":["test1","test2"]}`,
+		},
+		{
+			name:         "get_base_request_single_device",
+			method:       "GET",
+			url:          "/tvcom/",
+			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/single_device_config.yaml",
+			expectedCode: 404,
+			expectedBody: "404 page not found\n",
+		},
+		{
+			name:         "unsupported_base_method",
+			method:       "POST",
+			url:          "/tvcom/",
+			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
 			expectedCode: 405,
 			expectedBody: `{"message":"Method Not Allowed"}`,
 		},
 		{
+			name:         "malformed_json_body",
 			method:       "POST",
-			url:          "/tvcom/power",
-			data:         []byte(`{"code": "status"}`),
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":"status"}`,
-		},
-		{
-			method:       "POST",
-			url:          "/tvcom/power",
-			data:         []byte(`malformed_json`),
+			url:          "/tvcom/test1/volume",
+			data:         []byte(`not_json`),
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
 			expectedCode: 400,
 			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
 		},
 		{
+			name:         "malformed_query_string",
 			method:       "POST",
-			url:          "/tvcom/input_select?code=hdmi_3",
+			url:          "/tvcom/test2/volume?monkeytest",
 			data:         nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":"hdmi_3"}`,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
+			expectedCode: 400,
+			expectedBody: `{"message":"Malformed or empty query string"}`,
 		},
 		{
+			name:         "missing_code_variable",
 			method:       "POST",
-			url:          "/tvcom/input_select?code=non_existant_code",
+			url:          "/tvcom/test1/input_select",
 			data:         nil,
+			tvcomConfig:  "testdata/tvcomConfig/normal_config.yaml",
 			expectedCode: 400,
-			expectedBody: `{"message":"Invalid Variable"}`,
+			expectedBody: `{"message":"Invalid Parameter: code"}`,
 		},
 	}
 
-	tvcom, routes, err := generateRoutesFromConfig(500, "ws://test.com", "device.yaml")
-	if err != nil {
-		t.Fatalf("generateRoutesFromConfig returned an error: %v", err)
-	}
-	router := mux.NewRouter()
-	for _, r := range routes {
-		router.HandleFunc(r.Path, r.Handler)
-	}
-
-	server := setupWebsocketServer(t, tvcom, 500)
-	defer server.Close()
-
-	tvcom.WebSocketURL = "ws" + strings.TrimPrefix(server.URL, "http")
-
 	for _, tc := range testCases {
-		t.Run(tc.method+tc.url, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
+			tvcomConfigFile, err := os.ReadFile(tc.tvcomConfig)
+			if err != nil {
+				t.Fatalf("Could not read tvcom input")
+			}
+
+			tvcomConfig := device.Config{}
+
+			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
+				t.Fatalf("Could not read tvcom input")
+			}
+
+			base, routes, err := routes(&tvcomConfig, "device.yaml")
+			if err != nil {
+				t.Fatalf("routes returned an error: %v", err)
+			}
+
+			server := setupWebsocketServer(t, base.Devices[0], 500)
+			defer server.Close()
+			for i := range base.Devices {
+				base.Devices[i].Host = strings.TrimPrefix(server.URL, "http://")
+			}
+
+			router := mux.NewRouter()
+			for _, r := range routes {
+				router.HandleFunc(r.Path, r.Handler)
+			}
+
+			defer server.Close()
 			recorder := httptest.NewRecorder()
 
 			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
@@ -367,11 +428,11 @@ func TestOpcodeHandler(t *testing.T) {
 			router.ServeHTTP(recorder, request)
 
 			if recorder.Code != tc.expectedCode {
-				t.Errorf("Unexpected HTTP status code. Expected: %d, Got: %d", tc.expectedCode, recorder.Code)
+				t.Fatalf("Unexpected HTTP status code. Expected: %d, Got: %d", tc.expectedCode, recorder.Code)
 			}
 
 			if recorder.Body.String() != tc.expectedBody {
-				t.Errorf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
+				t.Fatalf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
 			}
 		})
 	}

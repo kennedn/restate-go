@@ -3,15 +3,16 @@ package tvcom
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"sort"
 	"time"
 
-	device "restate-go/internal/device/common"
-	router "restate-go/internal/router/common"
+	"github.com/kennedn/restate-go/internal/common/logging"
+	device "github.com/kennedn/restate-go/internal/device/common"
+	router "github.com/kennedn/restate-go/internal/router/common"
 
+	"github.com/gorilla/schema"
 	"github.com/gorilla/websocket"
 	"gopkg.in/yaml.v3"
 )
@@ -21,7 +22,6 @@ type configuration struct {
 	Data map[string]string `yaml:"data"`
 }
 
-// LightBulb represents a light bulb with an IP address and endpoint URL
 type opcode struct {
 	Tvcom    *tvcom
 	Code     string
@@ -31,11 +31,19 @@ type opcode struct {
 }
 
 type tvcom struct {
-	Timeout      time.Duration
-	WebSocketURL string
-	Opcodes      []opcode
-	OpcodeNames  []string
+	Name        string `yaml:"name"`
+	Timeout     uint   `yaml:"timeoutMs"`
+	Host        string `yaml:"host"`
+	Base        base
+	Opcodes     []opcode
+	OpcodeNames []string
 }
+
+type base struct {
+	Devices []*tvcom
+}
+
+type Device struct{}
 
 func (t *tvcom) getNames() []string {
 	return t.OpcodeNames
@@ -65,7 +73,7 @@ func (o *opcode) getDataCode(name string) string {
 }
 
 func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
-	conn, _, err := websocket.DefaultDialer.Dial(o.Tvcom.WebSocketURL, nil)
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+o.Tvcom.Host, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +81,7 @@ func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
 
 	message := []byte(o.Code + " 00 " + data + "\r")
 	if len(message) != 9 {
-		return nil, errors.New("Constructed message did not have the expected size")
+		return nil, errors.New("constructed message did not have the expected size")
 	}
 
 	err = conn.WriteMessage(websocket.TextMessage, message)
@@ -82,7 +90,7 @@ func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
 	}
 
 	// Receive data from the external device
-	conn.SetReadDeadline(time.Now().Add(o.Tvcom.Timeout * time.Millisecond))
+	conn.SetReadDeadline(time.Now().Add(time.Duration(o.Tvcom.Timeout) * time.Millisecond))
 	_, response, err := conn.ReadMessage()
 	if err != nil {
 		return nil, err
@@ -95,82 +103,158 @@ func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
 	}
 }
 
-func generateRoutesFromConfig(timeout time.Duration, websocketURL string, configPath string) (*tvcom, []router.Route, error) {
+func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
+	_, routes, err := routes(config, "")
+	return routes, err
+}
+
+func routes(config *device.Config, internalConfigPath string) (*base, []router.Route, error) {
 	routes := []router.Route{}
-	if configPath == "" {
-		configPath = "./internal/device/tvcom/device.yaml"
+	base := base{}
+
+	if internalConfigPath == "" {
+		internalConfigPath = "./internal/device/tvcom/device.yaml"
 	}
 
-	data, err := os.ReadFile(configPath)
+	internalConfigFile, err := os.ReadFile(internalConfigPath)
 	if err != nil {
 		return nil, []router.Route{}, err
 	}
 
-	tvcom := tvcom{Timeout: timeout, WebSocketURL: websocketURL}
 	configuration := []configuration{}
 
-	if err := yaml.Unmarshal(data, &configuration); err != nil {
+	if err := yaml.Unmarshal(internalConfigFile, &configuration); err != nil {
 		return nil, []router.Route{}, err
 	}
 
 	var opcodeNames []string
-
+	var opCodes []opcode
 	for _, c := range configuration {
+
+		// Store a sorted list of Datakeys so that ordered iteration of data can occur later
+		var dataKeys []string
+		for k := range c.Data {
+			dataKeys = append(dataKeys, k)
+		}
+		sort.Strings(dataKeys)
+
 		for code, name := range c.Keys {
-			// Store a sorted list of Datakeys so that ordered iteration of data can occur later
-			var dataKeys []string
-			for k := range c.Data {
-				dataKeys = append(dataKeys, k)
-			}
-			sort.Strings(dataKeys)
 
 			opcodeNames = append(opcodeNames, name)
 
 			op := opcode{
-				Tvcom:    &tvcom,
 				Code:     code,
 				Name:     name,
 				Data:     c.Data,
 				DataKeys: dataKeys,
 			}
-			tvcom.Opcodes = append(tvcom.Opcodes, op)
-			routes = append(routes, router.Route{
-				Path:    "/tvcom/" + op.Name,
-				Handler: op.Handler,
-			})
+			opCodes = append(opCodes, op)
 		}
 	}
-
 	sort.Strings(opcodeNames)
-	tvcom.OpcodeNames = opcodeNames
 
-	return &tvcom, routes, nil
-}
-
-func Routes(timeout time.Duration, websocketURL string, configPath string) ([]router.Route, error) {
-	tvcom, routes, err := generateRoutesFromConfig(timeout, websocketURL, configPath)
-	if err != nil {
-		return []router.Route{}, err
+	if len(opCodes) == 0 {
+		return nil, []router.Route{}, errors.New("no opcodes present in config")
 	}
 
-	if len(routes) == 0 {
-		return nil, errors.New("No routes could be retrieved from config at path " + configPath)
+	for _, d := range config.Devices {
+		if d.Type != "tvcom" {
+			continue
+		}
+
+		tvcom := tvcom{
+			Base: base,
+		}
+
+		yamlConfig, err := yaml.Marshal(d.Config)
+		if err != nil {
+			logging.Log(logging.Info, "Unable to marshal device config")
+			continue
+		}
+
+		if err := yaml.Unmarshal(yamlConfig, &tvcom); err != nil {
+			logging.Log(logging.Info, "Unable to unmarshal device config")
+			continue
+		}
+
+		if tvcom.Name == "" || tvcom.Host == "" {
+			logging.Log(logging.Info, "Unable to load device due to missing parameters")
+			continue
+		}
+
+		for _, o := range opCodes {
+			tmpOpcode := o
+			tmpOpcode.Tvcom = &tvcom
+			tvcom.Opcodes = append(tvcom.Opcodes, tmpOpcode)
+
+			routes = append(routes, router.Route{
+				Path:    "/" + tvcom.Name + "/" + tmpOpcode.Name,
+				Handler: tmpOpcode.handler,
+			})
+		}
+		tvcom.OpcodeNames = opcodeNames
+
+		routes = append(routes, router.Route{
+			Path:    "/" + tvcom.Name,
+			Handler: tvcom.handler,
+		})
+
+		routes = append(routes, router.Route{
+			Path:    "/" + tvcom.Name + "/",
+			Handler: tvcom.handler,
+		})
+
+		base.Devices = append(base.Devices, &tvcom)
+
+		logging.Log(logging.Info, "Found device \"%s\"", tvcom.Name)
 	}
 
-	routes = append(routes, router.Route{
-		Path:    "/tvcom/",
-		Handler: tvcom.Handler,
-	})
+	if len(base.Devices) == 0 {
+		return nil, []router.Route{}, errors.New("no devices found in config")
+	} else if len(base.Devices) == 1 {
+		return &base, routes, nil
+	}
+
+	for i, r := range routes {
+		routes[i].Path = "/tvcom" + r.Path
+	}
 
 	routes = append(routes, router.Route{
 		Path:    "/tvcom",
-		Handler: tvcom.Handler,
+		Handler: base.handler,
 	})
 
-	return routes, nil
+	routes = append(routes, router.Route{
+		Path:    "/tvcom/",
+		Handler: base.handler,
+	})
+
+	return &base, routes, nil
 }
 
-func (t *tvcom) Handler(w http.ResponseWriter, r *http.Request) {
+func (b *base) getDeviceNames() []string {
+	var names []string
+	for _, d := range b.Devices {
+		names = append(names, d.Name)
+	}
+	return names
+}
+
+func (b *base) handler(w http.ResponseWriter, r *http.Request) {
+	var jsonResponse []byte
+	var httpCode int
+
+	defer func() { device.JSONResponse(w, httpCode, jsonResponse) }()
+
+	if r.Method == http.MethodGet {
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", b.getDeviceNames())
+		return
+	}
+
+	httpCode, jsonResponse = device.SetJSONResponse(http.StatusMethodNotAllowed, "Method Not Allowed", nil)
+}
+
+func (t *tvcom) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
 
@@ -184,7 +268,7 @@ func (t *tvcom) Handler(w http.ResponseWriter, r *http.Request) {
 	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", t.getNames())
 }
 
-func (o *opcode) Handler(w http.ResponseWriter, r *http.Request) {
+func (o *opcode) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var err error
 	var httpCode int
@@ -201,29 +285,23 @@ func (o *opcode) Handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var dataName string
+	request := device.Request{}
+
 	if r.Header.Get("Content-Type") == "application/json" {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed Or Empty JSON Body", nil)
 			return
 		}
-
-		request := device.Request{}
-
-		if err := json.Unmarshal(body, &request); err != nil {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed Or Empty JSON Body", nil)
-			return
-		}
-
-		dataName = request.Code
 	} else {
-		dataName = r.URL.Query().Get("code")
+		if err := schema.NewDecoder().Decode(&request, r.URL.Query()); err != nil {
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed or empty query string", nil)
+			return
+		}
 	}
 
-	data := o.getDataCode(dataName)
+	data := o.getDataCode(request.Code)
 	if data == "" {
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Variable", nil)
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: code", nil)
 		return
 	}
 
@@ -232,12 +310,15 @@ func (o *opcode) Handler(w http.ResponseWriter, r *http.Request) {
 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 		return
 	}
+	if request.Code == "status" {
+		responseValue := o.getDataName(string(response[7:9]))
+		if responseValue == "" {
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+			return
+		}
 
-	responseValue := o.getDataName(string(response[7:9]))
-	if responseValue == "" {
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", responseValue)
 		return
 	}
-
-	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", responseValue)
+	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
 }

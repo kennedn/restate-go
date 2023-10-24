@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"restate-go/internal/common/logging"
-	device "restate-go/internal/device/common"
 	"strings"
 	"testing"
+
+	"github.com/kennedn/restate-go/internal/common/logging"
+	device "github.com/kennedn/restate-go/internal/device/common"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/schema"
@@ -110,7 +111,8 @@ func TestRoutes(t *testing.T) {
 			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
 				t.Fatalf("Could not read config file")
 			}
-			r, err := Routes(&merossConfig)
+			device := &Device{}
+			r, err := device.Routes(&merossConfig)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
@@ -269,7 +271,7 @@ func TestHandlers(t *testing.T) {
 				router.HandleFunc(r.Path, r.Handler)
 			}
 			server := setupHTTPServer(t, tc.serverConfig)
-			for i, _ := range base.Devices {
+			for i := range base.Devices {
 				base.Devices[i].Host = strings.TrimPrefix(server.URL, "http://")
 			}
 			defer server.Close()

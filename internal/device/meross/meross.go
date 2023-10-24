@@ -4,17 +4,20 @@ package meross
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
-	device "restate-go/internal/device/common"
-	router "restate-go/internal/router/common"
+	"github.com/kennedn/restate-go/internal/common/logging"
+	device "github.com/kennedn/restate-go/internal/device/common"
+	router "github.com/kennedn/restate-go/internal/router/common"
 
 	"github.com/gorilla/schema"
 	"gopkg.in/yaml.v3"
@@ -78,24 +81,12 @@ type base struct {
 	Devices      []*meross
 }
 
+type Device struct{}
+
 // Routes generates routes for Meross device control based on a provided configuration.
-func Routes(config *device.Config, internalConfigPath string) ([]router.Route, error) {
-	base, routes, err := generateRoutesFromConfig(config, internalConfigPath)
-	if err != nil || len(routes) == 0 {
-		return []router.Route{}, err
-	}
-
-	routes = append(routes, router.Route{
-		Path:    "/meross",
-		Handler: base.handler,
-	})
-
-	routes = append(routes, router.Route{
-		Path:    "/meross/",
-		Handler: base.handler,
-	})
-
-	return routes, nil
+func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
+	_, routes, err := routes(config, "")
+	return routes, err
 }
 
 // toJsonNumber converts a numeric value to a JSON number.
@@ -104,7 +95,7 @@ func toJsonNumber(value any) json.Number {
 }
 
 // generateRoutesFromConfig generates routes and base configuration from a provided configuration and internal config file.
-func generateRoutesFromConfig(config *device.Config, internalConfigPath string) (*base, []router.Route, error) {
+func routes(config *device.Config, internalConfigPath string) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{}
 
@@ -121,7 +112,7 @@ func generateRoutesFromConfig(config *device.Config, internalConfigPath string) 
 		return nil, []router.Route{}, err
 	}
 	if len(base.Endpoints) == 0 || base.BaseTemplate == "" {
-		return nil, []router.Route{}, fmt.Errorf("Unable to load internalConfigPath \"%s\"", internalConfigPath)
+		return nil, []router.Route{}, fmt.Errorf("unable to load internalConfigPath \"%s\"", internalConfigPath)
 	}
 
 	for _, d := range config.Devices {
@@ -134,25 +125,49 @@ func generateRoutesFromConfig(config *device.Config, internalConfigPath string) 
 
 		yamlConfig, err := yaml.Marshal(d.Config)
 		if err != nil {
-			return nil, []router.Route{}, err
+			logging.Log(logging.Info, "Unable to marshal device config")
+			continue
 		}
 
 		if err := yaml.Unmarshal(yamlConfig, &meross); err != nil {
-			return nil, []router.Route{}, err
+			logging.Log(logging.Info, "Unable to unmarshal device config")
+			continue
 		}
 
 		if meross.Name == "" || meross.Host == "" || meross.DeviceType == "" {
-			return nil, []router.Route{}, fmt.Errorf("Unable to load device due to missing parameters")
+			logging.Log(logging.Info, "Unable to load device due to missing parameters")
+			continue
 		}
 
 		routes = append(routes, router.Route{
-			Path:    "/meross/" + meross.Name,
+			Path:    meross.Name,
 			Handler: meross.handler,
 		})
 
 		base.Devices = append(base.Devices, &meross)
+
+		logging.Log(logging.Info, "Found device \"%s\"", meross.Name)
 	}
 
+	if len(routes) == 0 {
+		return nil, []router.Route{}, errors.New("no routes found in config")
+	} else if len(routes) == 1 {
+		return &base, routes, nil
+	}
+
+	for i, r := range routes {
+		routes[i].Path = "/meross/" + r.Path
+	}
+
+	routes = append(routes, router.Route{
+		Path:    "/meross",
+		Handler: base.handler,
+	})
+
+	routes = append(routes, router.Route{
+		Path:    "/meross/",
+		Handler: base.handler,
+	})
 	return &base, routes, nil
 }
 
@@ -425,6 +440,7 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 
 	if request.Hosts == "" {
 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: hosts", nil)
+		return
 	}
 
 	hosts := strings.Split(strings.ReplaceAll(request.Hosts, " ", ""), ",")
@@ -434,7 +450,7 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	for _, h := range hosts {
 		m := b.getDevice(h)
 		if m == nil {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter: host (Device '%s' does not exist)", h), nil)
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter: hosts (Device '%s' does not exist)", h), nil)
 			return
 		}
 
@@ -473,6 +489,10 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 			}
 			responseStruct.Devices = append(responseStruct.Devices, r)
 		}
+
+		sort.SliceStable(responseStruct.Devices, func(i int, j int) bool {
+			return responseStruct.Devices[i].Name < responseStruct.Devices[j].Name
+		})
 
 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", responseStruct)
 	case "toggle":

@@ -8,10 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"restate-go/internal/common/logging"
-	common "restate-go/internal/device/alert/common"
-	device "restate-go/internal/device/common"
 	"testing"
+
+	"github.com/kennedn/restate-go/internal/common/logging"
+	common "github.com/kennedn/restate-go/internal/device/alert/common"
+	device "github.com/kennedn/restate-go/internal/device/common"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -135,7 +136,8 @@ func TestRoutes(t *testing.T) {
 			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
 				t.Fatalf("Could not read config file")
 			}
-			r, err := Routes(&merossConfig)
+			device := &Device{}
+			r, err := device.Routes(&merossConfig)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 

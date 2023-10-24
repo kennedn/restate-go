@@ -1,0 +1,6 @@
+apiVersion: v2
+devices:
+- type: tvcom
+  config:
+- type: tvcom
+  config:
