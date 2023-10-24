@@ -7,16 +7,16 @@ spec:
   template:
     spec:
       containers:
-        - image: quay.io/kennedn/restate-go:latest
-          name: restate-go
-          ports:
-            - containerPort: 8080
-		  volumeMounts:
-		  - name: restate-go-config-volume
-			mountPath: /app/config.yml
-			subPath: config.yml
-		volumes:
-		- name: restate-go-config-volume
-		  configMap:
-			defaultMode: 420
-			name: restate-go-config
+      - image: quay.io/kennedn/restate-go:latest
+        name: restate-go
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: restate-go-config-volume
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+      volumes:
+      - name: restate-go-config-volume
+        secret:
+          defaultMode: 420
+          secretName: restate-go-config
