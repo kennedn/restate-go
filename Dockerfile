@@ -1,3 +1,5 @@
+FROM scionproto/docker-caps as caps
+
 # Use the UBI9 as the base image
 FROM golang:latest
 
@@ -11,7 +13,14 @@ COPY . .
 RUN go mod download
 RUN go build -o restate main.go
 
+RUN chmod 775 /app/restate
+COPY --from=caps /bin/setcap /bin
+RUN setcap cap_net_raw=+ep /app/restate && rm /bin/setcap
+
 ENV RESTATECONFIG=/app/config.yaml
+
+RUN useradd -m restate
+USER restate
 
 # Set the binary as the entrypoint
 ENTRYPOINT ["/app/restate"]
