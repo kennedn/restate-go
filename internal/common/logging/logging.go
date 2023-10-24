@@ -59,7 +59,7 @@ func RequestLogger(h http.Handler) http.Handler {
 		}
 
 		h.ServeHTTP(recorder, r)
-        clientIP := r.Header.Get("X-Origin")
+        clientIP := r.Header.Get("X-Forwarded-For")
         if clientIP == "" {
             clientIP = strings.Split(r.RemoteAddr, ":")[0]
         }

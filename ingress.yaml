@@ -10,7 +10,6 @@ metadata:
       satisfy any;
       allow 192.168.1.0/24;
       deny all;
-      add_header X-Origin $remote_addr
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
   tls:
