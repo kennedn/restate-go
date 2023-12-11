@@ -515,7 +515,7 @@ func TestWolHandler(t *testing.T) {
 					return 0, nil, tc.readError
 				},
 			}
-			for i, _ := range base.devices {
+			for i := range base.devices {
 				base.devices[i].conn = mockConn
 			}
 			recorder := httptest.NewRecorder()

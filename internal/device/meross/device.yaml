@@ -1,4 +1,4 @@
-baseTemplate: '{"header":{"messageId":"","method":"%s","namespace":"%s","payloadVersion":1,"sign":"cfcd208495d565ef66e7dff9f98764da","timestamp":0},"payload":%s}'
+baseTemplate: '{"header":{"from": "http://10.10.10.1/config", "messageId":"%s","method":"%s","namespace":"%s","payloadVersion":1,"sign":"%s","timestamp":0},"payload":%s}'
 endpoints:
 - code: toggle
   supportedDevices: 

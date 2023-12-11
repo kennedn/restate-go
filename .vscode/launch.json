@@ -13,6 +13,7 @@
             "console": "integratedTerminal",
             "env": {
                 "PATH": "$PATH:/usr/local/go/bin",
+                "RESTATECONFIG": "/home/kennedn/Projects/restate-go/config/config.yaml"
             },
             "asRoot": true
         },

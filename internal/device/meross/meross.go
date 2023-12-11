@@ -3,6 +3,9 @@ package meross
 
 import (
 	"bytes"
+	"crypto/md5"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -190,6 +193,25 @@ func (m *meross) getEndpoint(code string) *endpoint {
 	return nil
 }
 
+func randomHex(n int) string {
+	bytes := make([]byte, n)
+	if _, err := rand.Read(bytes); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(bytes)
+}
+
+func md5SumString(s string) string {
+	// Calculate the MD5 hash
+	hasher := md5.New()
+	hasher.Write([]byte(s))
+	hashBytes := hasher.Sum(nil)
+
+	// Convert the hash bytes to a hexadecimal string
+	return hex.EncodeToString(hashBytes)
+
+}
+
 // post constructs and sends a POST request to a Meross device and will return a flattened status when the method is equal to GET.
 func (m *meross) post(method string, endpoint endpoint, value json.Number) (*status, error) {
 	client := &http.Client{
@@ -203,7 +225,11 @@ func (m *meross) post(method string, endpoint endpoint, value json.Number) (*sta
 		payload = endpoint.Template
 	}
 
-	jsonPayload := []byte(fmt.Sprintf(m.Base.BaseTemplate, method, endpoint.Namespace, payload))
+	// Newer firmware (6.2.5) requires a unique nonce for messageId
+	messageId := randomHex(16)
+	sign := md5SumString(fmt.Sprintf("%s%d", messageId, 0))
+
+	jsonPayload := []byte(fmt.Sprintf(m.Base.BaseTemplate, messageId, method, endpoint.Namespace, sign, payload))
 
 	req, err := http.NewRequest("POST", "http://"+m.Host+"/config", bytes.NewReader(jsonPayload))
 	if err != nil {
@@ -349,7 +375,6 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-	return
 }
 
 // getDeviceNames returns the names of all Meross devices in the base configuration.
