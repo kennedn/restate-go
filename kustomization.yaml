@@ -2,7 +2,6 @@ resources:
   - deployment.yaml
   - service.yaml
   - ingress.yaml
-  - network-attachment.yaml
 
 namespace: default
 

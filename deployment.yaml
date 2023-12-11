@@ -5,10 +5,8 @@ metadata:
 spec:
   replicas: 1
   template:
-    metadata:
-      annotations:
-        k8s.v1.cni.cncf.io/networks: restate-multicast
     spec:
+      hostNetwork: true
       containers:
       - image: quay.io/kennedn/restate-go:latest
         name: restate-go
