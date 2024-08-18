@@ -3,6 +3,7 @@ kind: Ingress
 metadata:
   name: restate-go
   annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
     nginx.ingress.kubernetes.io/auth-type: basic
     nginx.ingress.kubernetes.io/auth-secret: restate-go-basic-auth
     nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required'

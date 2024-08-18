@@ -4,6 +4,7 @@ endpoints:
   supportedDevices: 
   - bulb
   - socket
+  - switch
   minValue: 0
   maxValue: 1
   namespace: Appliance.Control.ToggleX
@@ -12,6 +13,7 @@ endpoints:
   supportedDevices: 
   - bulb
   - socket
+  - switch
   namespace: Appliance.System.All
   template: '{}'
 - code: luminance
