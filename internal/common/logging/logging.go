@@ -29,8 +29,12 @@ func SetLogLevel(level string) {
 
 // Log logs a message with file and line number information at the specified level.
 func Log(level string, message string, args ...any) {
+	_log(level, message, args...)
+}
+
+func _log(level string, message string, args ...any) {
 	if currentLevel >= level {
-		_, file, line, ok := runtime.Caller(1)
+		_, file, line, ok := runtime.Caller(2)
 		if ok {
 			_, filename := filepath.Split(file)
 			timestamp := time.Now().Format("2006-01-02 15:04:05.999")
@@ -39,6 +43,16 @@ func Log(level string, message string, args ...any) {
 		}
 		logger.Println(message)
 	}
+
+}
+
+func NginxLog(level string, method string, url string, request *http.Request, response *http.Response) {
+	urlSlice := strings.Split(url, "/")
+	referer := request.Referer()
+	if referer == "" {
+		referer = "-"
+	}
+	_log(Info, "%s %s \"%s %s %s\" %d \"%s\" \"%s\"", urlSlice[2], "", method, strings.Join(urlSlice[3:], "/"), request.Proto, response.StatusCode, referer, request.UserAgent())
 }
 
 type StatusRecorder struct {
@@ -59,10 +73,10 @@ func RequestLogger(h http.Handler) http.Handler {
 		}
 
 		h.ServeHTTP(recorder, r)
-        clientIP := r.Header.Get("X-Forwarded-For")
-        if clientIP == "" {
-            clientIP = strings.Split(r.RemoteAddr, ":")[0]
-        }
+		clientIP := r.Header.Get("X-Forwarded-For")
+		if clientIP == "" {
+			clientIP = strings.Split(r.RemoteAddr, ":")[0]
+		}
 		method := r.Method
 		user := r.URL.User.Username()
 		path := r.URL.RequestURI()
@@ -72,6 +86,6 @@ func RequestLogger(h http.Handler) http.Handler {
 			referer = "-"
 		}
 		userAgent := r.UserAgent()
-		Log(Info, "%s %s \"%s %s %s\" %d \"%s\" \"%s\"", clientIP, user, method, path, r.Proto, status, referer, userAgent)
+		_log(Info, "%s %s \"%s %s %s\" %d \"%s\" \"%s\"", clientIP, user, method, path, r.Proto, status, referer, userAgent)
 	})
 }

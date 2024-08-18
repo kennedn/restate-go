@@ -1,0 +1,16 @@
+codes:
+- name: normal
+  httpCode: 200
+  json: '{"status":1,"request":"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"}'
+- name: bad-token
+  httpCode: 400
+  json: '{"token":"invalid","errors":["application token is invalid, see https://pushover.net/api"],"status":0,"request":"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"}'
+- name: bad-user
+  httpCode: 400
+  json: '{"user":"invalid","errors":["user identifier is not a valid user, group, or subscribed user key, see https://pushover.net/api#identifiers"],"status":0,"request":"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"}'
+- name: bad-priority
+  httpCode: 400
+  json: '{"priority":"is invalid, can only be -2, -1, 0, 1, or 2","errors":["priority is invalid, see https://pushover.net/api#priority"],"status":0,"request":"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"}'
+- name: internal-error
+  httpCode: 500
+  json: '{"errors":["Internal Server Error"]}'

@@ -1,0 +1,13 @@
+apiVersion: v2
+devices:
+- type: frigate
+  config:
+    name: frigate
+    timeoutMs: 3000
+    mqtt:
+      url: 192.0.2.0
+    alert:
+      token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      url: http://192.0.2.0:8080/v2/alert
+    frigate:
+      url: http://192.0.2.0

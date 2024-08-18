@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	device "github.com/kennedn/restate-go/internal/device/common"
 
@@ -106,7 +107,7 @@ func TestRoutes(t *testing.T) {
 				t.Fatalf("Could not read config file")
 			}
 
-			merossConfig := device.Config{}
+			merossConfig := config.Config{}
 
 			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
 				t.Fatalf("Could not read config file")
@@ -255,7 +256,7 @@ func TestHandlers(t *testing.T) {
 				t.Fatalf("Could not read snowdon input")
 			}
 
-			snowdonConfig := device.Config{}
+			snowdonConfig := config.Config{}
 
 			if err := yaml.Unmarshal(snowdonConfigFile, &snowdonConfig); err != nil {
 				t.Fatalf("Could not read snowdon input")

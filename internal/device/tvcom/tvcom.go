@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	device "github.com/kennedn/restate-go/internal/device/common"
 	router "github.com/kennedn/restate-go/internal/router/common"
@@ -103,12 +104,12 @@ func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
 	}
 }
 
-func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
+func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 	_, routes, err := routes(config, "")
 	return routes, err
 }
 
-func routes(config *device.Config, internalConfigPath string) (*base, []router.Route, error) {
+func routes(config *config.Config, internalConfigPath string) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{}
 

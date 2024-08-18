@@ -8,21 +8,15 @@ import (
 	"net/http"
 	"time"
 
+	config "github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
+	common "github.com/kennedn/restate-go/internal/device/alert/common"
 	device "github.com/kennedn/restate-go/internal/device/common"
 	router "github.com/kennedn/restate-go/internal/router/common"
 
 	"github.com/gorilla/schema"
 	"gopkg.in/yaml.v3"
 )
-
-type Request struct {
-	Message  string      `json:"message"`
-	Title    string      `json:"title,omitempty"`
-	Priority json.Number `json:"priority,omitempty"`
-	Token    string      `json:"token,omitempty"`
-	User     string      `json:"user,omitempty"`
-}
 
 type rawResponse struct {
 	Status int      `json:"status"`
@@ -44,12 +38,14 @@ type base struct {
 
 type Device struct{}
 
-func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
+// Device interface function for generating routes
+func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 	_, routes, err := routes(config)
 	return routes, err
 }
 
-func routes(config *device.Config) (*base, []router.Route, error) {
+// Extract devices of type alert from config and return a list of routes
+func routes(config *config.Config) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{
 		URL: "https://api.pushover.net/1/messages.json",
@@ -111,7 +107,8 @@ func routes(config *device.Config) (*base, []router.Route, error) {
 	return &base, routes, nil
 }
 
-func (a *alert) post(request Request) (*rawResponse, int, error) {
+// Sanitise params and post to pushover
+func (a *alert) post(request common.Request) (*rawResponse, int, error) {
 	client := &http.Client{
 		Timeout: time.Duration(a.Timeout) * time.Millisecond,
 	}
@@ -161,6 +158,7 @@ func (a *alert) post(request Request) (*rawResponse, int, error) {
 	return &rawResponse, resp.StatusCode, nil
 }
 
+// Handle alert http request
 func (a *alert) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
@@ -175,7 +173,7 @@ func (a *alert) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request := Request{}
+	request := common.Request{}
 
 	if r.Header.Get("Content-Type") == "application/json" {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -218,7 +216,7 @@ func (b *base) getDeviceNames() []string {
 	return names
 }
 
-// Handler is the HTTP handler for handling requests to control multiple alert devicea.
+// Handles returning list of configured devices
 func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
@@ -231,6 +229,4 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpCode, jsonResponse = device.SetJSONResponse(http.StatusMethodNotAllowed, "Method Not Allowed", nil)
-	return
-
 }

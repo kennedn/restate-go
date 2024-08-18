@@ -3,23 +3,21 @@ package device
 import (
 	"errors"
 	"net/http"
-	"os"
 	"strings"
 
+	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	"github.com/kennedn/restate-go/internal/device/alert"
-	common "github.com/kennedn/restate-go/internal/device/common"
+	"github.com/kennedn/restate-go/internal/device/common"
 	"github.com/kennedn/restate-go/internal/device/meross"
 	"github.com/kennedn/restate-go/internal/device/snowdon"
 	"github.com/kennedn/restate-go/internal/device/tvcom"
 	"github.com/kennedn/restate-go/internal/device/wol"
 	router "github.com/kennedn/restate-go/internal/router/common"
-
-	"gopkg.in/yaml.v3"
 )
 
 type Device interface {
-	Routes(config *common.Config) ([]router.Route, error)
+	Routes(config *config.Config) ([]router.Route, error)
 }
 
 type Devices struct {
@@ -36,28 +34,14 @@ var (
 	}
 )
 
-func (d *Devices) Routes() ([]router.Route, error) {
-	envConfigPath := os.Getenv("RESTATECONFIG")
-
-	config, err := os.ReadFile(envConfigPath)
-	if err != nil {
-		logging.Log(logging.Error, "Could not read config path (RESTATECONFIG=%s)", envConfigPath)
-		return []router.Route{}, err
-	}
-
-	deviceConfig := common.Config{}
-
-	if err := yaml.Unmarshal(config, &deviceConfig); err != nil {
-		logging.Log(logging.Error, "Could not parse config path (RESTATECONFIG=%s)", envConfigPath)
-		return []router.Route{}, err
-	}
+func (d *Devices) Routes(config *config.Config) ([]router.Route, error) {
 
 	for _, device := range devices {
-		tmpRoutes, _ := device.Routes(&deviceConfig)
+		tmpRoutes, _ := device.Routes(config)
 
 		// Prepend API version to route paths
 		for i, r := range tmpRoutes {
-			tmpRoutes[i].Path = "/" + deviceConfig.ApiVersion + r.Path
+			tmpRoutes[i].Path = "/" + config.ApiVersion + r.Path
 		}
 
 		d.routes = append(d.routes, tmpRoutes...)
@@ -69,12 +53,12 @@ func (d *Devices) Routes() ([]router.Route, error) {
 	}
 
 	d.routes = append(d.routes, router.Route{
-		Path:    "/" + deviceConfig.ApiVersion,
+		Path:    "/" + config.ApiVersion,
 		Handler: d.handler,
 	})
 
 	d.routes = append(d.routes, router.Route{
-		Path:    "/" + deviceConfig.ApiVersion + "/",
+		Path:    "/" + config.ApiVersion + "/",
 		Handler: d.handler,
 	})
 

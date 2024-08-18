@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	device "github.com/kennedn/restate-go/internal/device/common"
 	router "github.com/kennedn/restate-go/internal/router/common"
@@ -34,17 +35,17 @@ type base struct {
 
 type Device struct{}
 
-func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
+func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 	_, routes, err := routes(config)
 	return routes, err
 }
 
-func routes(config *device.Config) (*base, []router.Route, error) {
+func routes(config *config.Config) (*base, []router.Route, error) {
 	routes := []router.Route{}
 
 	base := base{
 		udpAddr: &net.UDPAddr{
-			IP:   net.ParseIP("192.168.1.255"),
+			IP:   net.ParseIP("192.168.1.254"),
 			Port: 9,
 		},
 	}

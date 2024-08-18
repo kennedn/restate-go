@@ -10,9 +10,8 @@ import (
 	"testing"
 	"time"
 
-	device "github.com/kennedn/restate-go/internal/device/common"
-
 	"github.com/gorilla/mux"
+	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -321,7 +320,7 @@ func TestRoutes(t *testing.T) {
 				t.Fatalf("Could not read meross input")
 			}
 
-			merossConfig := device.Config{}
+			merossConfig := config.Config{}
 
 			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
 				t.Fatalf("Could not read meross input")
@@ -489,7 +488,7 @@ func TestWolHandler(t *testing.T) {
 		t.Fatalf("Could not read wol input")
 	}
 
-	wolConfig := device.Config{}
+	wolConfig := config.Config{}
 
 	if err := yaml.Unmarshal(wolConfigFile, &wolConfig); err != nil {
 		t.Fatalf("Could not read wol input")

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	device "github.com/kennedn/restate-go/internal/device/common"
 	router "github.com/kennedn/restate-go/internal/router/common"
@@ -87,7 +88,7 @@ type base struct {
 type Device struct{}
 
 // Routes generates routes for Meross device control based on a provided configuration.
-func (d *Device) Routes(config *device.Config) ([]router.Route, error) {
+func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 	_, routes, err := routes(config, "")
 	return routes, err
 }
@@ -98,7 +99,7 @@ func toJsonNumber(value any) json.Number {
 }
 
 // generateRoutesFromConfig generates routes and base configuration from a provided configuration and internal config file.
-func routes(config *device.Config, internalConfigPath string) (*base, []router.Route, error) {
+func routes(config *config.Config, internalConfigPath string) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{}
 

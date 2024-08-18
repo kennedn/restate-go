@@ -15,7 +15,7 @@
                 "PATH": "$PATH:/usr/local/go/bin",
                 "RESTATECONFIG": "/home/kennedn/Projects/restate-go/config/config.yaml"
             },
-            "asRoot": true
+            // "asRoot": true
         },
         {
             "name": "Debug Current File",
@@ -27,7 +27,7 @@
             "env": {
                 "PATH": "$PATH:/usr/local/go/bin"
             },
-            "asRoot": true
+            // "asRoot": true
         },
         {
             "name": "Debug Test",
@@ -39,7 +39,7 @@
             "env": {
                 "PATH": "$PATH:/usr/local/go/bin"
             },
-            "asRoot": true,
+            // "asRoot": true,
             "args": ["^TestPing$"]
         }
     ]

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
-	device "github.com/kennedn/restate-go/internal/device/common"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
@@ -129,7 +129,7 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 				t.Fatalf("Could not read tvcom input")
 			}
 
-			tvcomConfig := device.Config{}
+			tvcomConfig := config.Config{}
 
 			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
 				t.Fatalf("Could not read tvcom input")
@@ -249,7 +249,7 @@ func TestRoutes(t *testing.T) {
 				t.Fatalf("Could not read tvcom input")
 			}
 
-			tvcomConfig := device.Config{}
+			tvcomConfig := config.Config{}
 
 			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
 				t.Fatalf("Could not read tvcom input")
@@ -395,7 +395,7 @@ func TestHandlers(t *testing.T) {
 				t.Fatalf("Could not read tvcom input")
 			}
 
-			tvcomConfig := device.Config{}
+			tvcomConfig := config.Config{}
 
 			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
 				t.Fatalf("Could not read tvcom input")

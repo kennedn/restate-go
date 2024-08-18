@@ -10,9 +10,9 @@ import (
 	"os"
 	"testing"
 
+	config "github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	common "github.com/kennedn/restate-go/internal/device/alert/common"
-	device "github.com/kennedn/restate-go/internal/device/common"
 
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
@@ -131,7 +131,7 @@ func TestRoutes(t *testing.T) {
 				t.Fatalf("Could not read config file")
 			}
 
-			merossConfig := device.Config{}
+			merossConfig := config.Config{}
 
 			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
 				t.Fatalf("Could not read config file")
@@ -300,7 +300,7 @@ func TestHandlers(t *testing.T) {
 				t.Fatalf("Could not read alert input")
 			}
 
-			alertConfig := device.Config{}
+			alertConfig := config.Config{}
 
 			if err := yaml.Unmarshal(alertConfigFile, &alertConfig); err != nil {
 				t.Fatalf("Could not read alert input")
