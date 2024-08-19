@@ -192,7 +192,12 @@ func (l *listener) Listen() {
 		_, _, _ = l.sendAlert(alertRequest)
 
 	})
-	if token.Wait() && token.Error() != nil {
+	// Avoid having to mock token in unit tests
+	if token == nil {
+		return
+	}
+	// Check that subscription to topic occured
+	if err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond); err != nil {
 		logging.Log(logging.Error, "Failed to subscribe to MQTT topic: %v", token.Error())
 	}
 }

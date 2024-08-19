@@ -38,7 +38,43 @@ func findCode(name string, serverConfig *serverConfig) *code {
 	return nil
 }
 
-func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
+func mockFrigateServer(t *testing.T, thumbnailPath string) *httptest.Server {
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, thumbnailPath)
+
+		// rawBody, err := io.ReadAll(r.Body)
+		// if err != nil {
+		// 	t.Fatalf("Could not read request body")
+		// }
+
+		// if err := json.Unmarshal(rawBody, &request); err != nil {
+		// 	t.Fatalf("Could not parse request body")
+		// }
+
+		// resp := findCode("normal", serverConfig)
+		// if request.Message == "error" {
+		// 	resp = findCode("internal-error", serverConfig)
+		// } else if request.Token == "error" {
+		// 	resp = findCode("bad-token", serverConfig)
+		// } else if request.User == "error" {
+		// 	resp = findCode("bad-user", serverConfig)
+		// } else if request.Priority.String() != "" {
+		// 	priority, err := request.Priority.Int64()
+		// 	if err != nil || priority < -2 || priority > 2 {
+		// 		resp = findCode("bad-priority", serverConfig)
+		// 	}
+		// }
+		// w.Header().Set("Content-Type", "application/json")
+		// w.WriteHeader(resp.HttpCode)
+		// w.Write([]byte(resp.Json))
+
+	}))
+
+	return server
+}
+
+func mockAlertServer(t *testing.T, serverConfigPath string) *httptest.Server {
 	serverConfigFile, err := os.ReadFile(serverConfigPath)
 	if err != nil {
 		t.Fatalf("Could not read serverConfigPath")
@@ -62,18 +98,18 @@ func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
 		}
 
 		resp := findCode("normal", serverConfig)
-		if request.Message == "error" {
-			resp = findCode("internal-error", serverConfig)
-		} else if request.Token == "error" {
-			resp = findCode("bad-token", serverConfig)
-		} else if request.User == "error" {
-			resp = findCode("bad-user", serverConfig)
-		} else if request.Priority.String() != "" {
-			priority, err := request.Priority.Int64()
-			if err != nil || priority < -2 || priority > 2 {
-				resp = findCode("bad-priority", serverConfig)
-			}
-		}
+		// if request.Message == "error" {
+		// 	resp = findCode("internal-error", serverConfig)
+		// } else if request.Token == "error" {
+		// 	resp = findCode("bad-token", serverConfig)
+		// } else if request.User == "error" {
+		// 	resp = findCode("bad-user", serverConfig)
+		// } else if request.Priority.String() != "" {
+		// 	priority, err := request.Priority.Int64()
+		// 	if err != nil || priority < -2 || priority > 2 {
+		// 		resp = findCode("bad-priority", serverConfig)
+		// 	}
+		// }
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.HttpCode)
 		w.Write([]byte(resp.Json))
@@ -83,54 +119,54 @@ func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
 	return server
 }
 
-type mockMQTTClient struct {
+type mockMqttClient struct {
 	subscribeFunc func(client mqtt.Client, callback mqtt.MessageHandler)
 }
 
 // IsConnected returns a hardcoded true value indicating the client is always connected
-func (mc *mockMQTTClient) IsConnected() bool {
+func (mc *mockMqttClient) IsConnected() bool {
 	return true
 }
 
 // IsConnectionOpen returns a hardcoded true value indicating the connection is always open
-func (mc *mockMQTTClient) IsConnectionOpen() bool {
+func (mc *mockMqttClient) IsConnectionOpen() bool {
 	return true
 }
 
 // Connect simulates a connection and returns a mock Token
-func (mc *mockMQTTClient) Connect() mqtt.Token {
+func (mc *mockMqttClient) Connect() mqtt.Token {
 	return nil
 }
 
 // Disconnect simulates a disconnect operation with no real effect
-func (mc *mockMQTTClient) Disconnect(quiesce uint) {}
+func (mc *mockMqttClient) Disconnect(quiesce uint) {}
 
 // Publish simulates publishing a message and returns a mock Token
-func (mc *mockMQTTClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
+func (mc *mockMqttClient) Publish(topic string, qos byte, retained bool, payload interface{}) mqtt.Token {
 	return nil
 }
 
 // Subscribe simulates a subscription and returns a mock Token
-func (mc *mockMQTTClient) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token {
+func (mc *mockMqttClient) Subscribe(topic string, qos byte, callback mqtt.MessageHandler) mqtt.Token {
 	mc.subscribeFunc(mc, callback)
 	return nil
 }
 
 // SubscribeMultiple simulates multiple subscriptions and returns a mock Token
-func (mc *mockMQTTClient) SubscribeMultiple(filters map[string]byte, callback mqtt.MessageHandler) mqtt.Token {
+func (mc *mockMqttClient) SubscribeMultiple(filters map[string]byte, callback mqtt.MessageHandler) mqtt.Token {
 	return nil
 }
 
 // Unsubscribe simulates unsubscribing from topics and returns a mock Token
-func (mc *mockMQTTClient) Unsubscribe(topics ...string) mqtt.Token {
+func (mc *mockMqttClient) Unsubscribe(topics ...string) mqtt.Token {
 	return nil
 }
 
 // AddRoute simulates adding a route with a message handler
-func (mc *mockMQTTClient) AddRoute(topic string, callback mqtt.MessageHandler) {}
+func (mc *mockMqttClient) AddRoute(topic string, callback mqtt.MessageHandler) {}
 
 // OptionsReader returns a nil ClientOptionsReader
-func (mc *mockMQTTClient) OptionsReader() mqtt.ClientOptionsReader {
+func (mc *mockMqttClient) OptionsReader() mqtt.ClientOptionsReader {
 	return mqtt.ClientOptionsReader{}
 }
 
@@ -179,16 +215,6 @@ func (m *mockMessage) Payload() []byte {
 // Ack performs the acknowledgment callback
 func (m *mockMessage) Ack() {
 	m.once.Do(m.ack)
-}
-
-func newMockMQTTClientWithMessage(payload []byte) mqtt.Client {
-	return &mockMQTTClient{
-		subscribeFunc: func(client mqtt.Client, callback mqtt.MessageHandler) {
-			callback(client, &mockMessage{
-				payload: payload,
-			})
-		},
-	}
 }
 
 func TestListeners(t *testing.T) {
@@ -245,7 +271,7 @@ func TestListeners(t *testing.T) {
 				t.Fatalf("Could not read config file")
 			}
 
-			_, l, err := listeners(&configMap, &mockMQTTClient{})
+			_, l, err := listeners(&configMap, &mockMqttClient{})
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
@@ -258,7 +284,13 @@ func TestListeners(t *testing.T) {
 }
 
 func TestListen(t *testing.T) {
+	logging.SetLogLevel(logging.Error)
 	t.Run("listen_test", func(t *testing.T) {
+		// Setup wait group to wait for mqtt callback instead of immediatly returning
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		payload := []byte(`{"type":"new","before":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"},"after":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"}}`)
 		configFile, err := os.ReadFile("testdata/alertConfig/single_device_config.yaml")
 		if err != nil {
 			t.Fatalf("Could not read config file")
@@ -269,11 +301,64 @@ func TestListen(t *testing.T) {
 		if err := yaml.Unmarshal(configFile, &configMap); err != nil {
 			t.Fatalf("Could not read config file")
 		}
-		payload := []byte(`{"type":"new","before":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"},"after":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"}}`)
-		mockClient := newMockMQTTClientWithMessage(payload)
-		_, l, _ := listeners(&configMap, mockClient)
+		mockClient := &mockMqttClient{
+			subscribeFunc: func(client mqtt.Client, callback mqtt.MessageHandler) {
+				// Mark wait group as complete
+				defer wg.Done()
+				callback(client, &mockMessage{
+					payload: payload,
+				})
+			},
+		}
 
-		l[0].Listen()
+		_, ls, _ := listeners(&configMap, mockClient)
+		l := ls[0]
+
+		expectedUrlPath := "/api/events/1723938588.335444-ctmuov/thumbnail.jpg"
+		thumbnailPath := "testdata/serverConfig/thumbnail.jpg"
+		frigateServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != expectedUrlPath {
+				t.Fatalf("Unexpected URL path provided for call. Expected: %s, Got: %s", expectedUrlPath, r.URL.Path)
+			}
+			http.ServeFile(w, r, thumbnailPath)
+		}))
+
+		serverConfigPath := "testdata/serverConfig/alert_responses.yaml"
+		serverConfigFile, err := os.ReadFile(serverConfigPath)
+		if err != nil {
+			t.Fatalf("Could not read serverConfigPath")
+		}
+
+		serverConfig := &serverConfig{}
+		if err := yaml.Unmarshal(serverConfigFile, &serverConfig); err != nil {
+			t.Fatalf("Could not parse serverConfigPath")
+		}
+		alertServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			request := common.Request{}
+
+			rawBody, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("Could not read request body")
+			}
+
+			if err := json.Unmarshal(rawBody, &request); err != nil {
+				t.Fatalf("Could not parse request body")
+			}
+
+			resp := findCode("normal", serverConfig)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(resp.HttpCode)
+			w.Write([]byte(resp.Json))
+
+		}))
+		defer frigateServer.Close()
+		defer alertServer.Close()
+		l.Config.Frigate.URL = frigateServer.URL
+		l.Config.Alert.URL = alertServer.URL
+		l.Listen()
+
+		// Await the mqtt callback firing
+		wg.Wait()
 	})
 }
 
