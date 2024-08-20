@@ -62,7 +62,7 @@ type listenerConfig struct {
 	Client  mqtt.Client
 	Timeout uint `yaml:"timeoutMs"`
 	MQTT    struct {
-		Host string `yaml:"url"`
+		Host string `yaml:"host"`
 		Port int    `yaml:"port"`
 	} `yaml:"mqtt"`
 	Alert struct {
