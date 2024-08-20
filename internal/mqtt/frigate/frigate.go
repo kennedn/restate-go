@@ -73,7 +73,7 @@ type listenerConfig struct {
 	} `yaml:"alert"`
 	Frigate struct {
 		URL         string `yaml:"url"`
-		externalUrl string `yaml:"externalUrl"`
+		ExternalUrl string `yaml:"externalUrl"`
 	} `yaml:"frigate"`
 }
 
@@ -141,8 +141,8 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 			listenerConfig.MQTT.Port = 1883
 		}
 
-		if listenerConfig.Frigate.externalUrl == "" {
-			listenerConfig.Frigate.externalUrl = listenerConfig.Frigate.URL
+		if listenerConfig.Frigate.ExternalUrl == "" {
+			listenerConfig.Frigate.ExternalUrl = listenerConfig.Frigate.URL
 		}
 
 		if client == nil {
@@ -226,7 +226,7 @@ func (l *listener) createAlertRequest(review *review) alert.Request {
 		Priority:         toJsonNumber(l.Config.Alert.Priority),
 		Token:            l.Config.Alert.Token,
 		User:             l.Config.Alert.User,
-		URL:              l.Config.Frigate.externalUrl,
+		URL:              l.Config.Frigate.ExternalUrl,
 		URLTitle:         "Open Frigate",
 		AttachmentBase64: attachmentBase64,
 		AttachmentType:   attachmentType,
