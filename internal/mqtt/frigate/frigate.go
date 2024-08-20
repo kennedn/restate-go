@@ -74,7 +74,7 @@ type listenerConfig struct {
 	Frigate struct {
 		URL         string `yaml:"url"`
 		externalUrl string `yaml:"externalUrl"`
-	}
+	} `yaml:"frigate"`
 }
 
 type base struct {
