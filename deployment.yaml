@@ -6,8 +6,10 @@ spec:
   template:
     spec:
       hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       containers:
       - image: quay.io/kennedn/restate-go:latest
+        imagePullPolicy: Always
         name: restate-go
         ports:
         - containerPort: 8080
