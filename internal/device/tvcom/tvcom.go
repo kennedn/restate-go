@@ -73,6 +73,8 @@ func (o *opcode) getDataCode(name string) string {
 	return ""
 }
 
+// websocketWriteWithResponse sends a message over a WebSocket connection and waits for a response.
+// It returns the response or an error if the response is not received within the specified timeout.
 func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
 	conn, _, err := websocket.DefaultDialer.Dial("ws://"+o.Tvcom.Host, nil)
 	if err != nil {

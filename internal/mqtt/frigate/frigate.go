@@ -207,32 +207,6 @@ func (l *listener) Listen() {
 	}
 }
 
-// Generates an alert request from a MQTT review message.
-func (l *listener) createAlertRequest(review *review) alert.Request {
-	// Create a message based on event details
-	message := fmt.Sprintf("%s detected at %s", joinStringSlice(review.After.Data.Objects), joinStringSlice(review.After.Data.Zones))
-	// Obtain the event ID with the latest timestamp in the review
-	eventIds := review.After.Data.Detections
-	sort.Sort(sort.Reverse(sort.StringSlice(eventIds)))
-	// Obtain associated thumbnail of the latest event ID
-	attachmentBase64, _ := l.attachmentBase64(eventIds[0])
-	attachmentType := ""
-	if attachmentBase64 != "" {
-		attachmentType = "image/jpeg"
-	}
-	return alert.Request{
-		Message:          message,
-		Title:            "Frigate",
-		Priority:         toJsonNumber(l.Config.Alert.Priority),
-		Token:            l.Config.Alert.Token,
-		User:             l.Config.Alert.User,
-		URL:              l.Config.Frigate.ExternalUrl,
-		URLTitle:         "Open Frigate",
-		AttachmentBase64: attachmentBase64,
-		AttachmentType:   attachmentType,
-	}
-}
-
 // GET request to obtain the associated thumbnail image of a frigate eventID
 func (l *listener) attachmentBase64(eventId string) (string, error) {
 	method := "GET"
@@ -269,7 +243,33 @@ func (l *listener) attachmentBase64(eventId string) (string, error) {
 	return base64Image, nil
 }
 
-// sendAlert sends an alert based on the provided request.
+// Generates a pushover alert request from a MQTT review message.
+func (l *listener) createAlertRequest(review *review) alert.Request {
+	// Create a message based on event details
+	message := fmt.Sprintf("%s detected at %s", joinStringSlice(review.After.Data.Objects), joinStringSlice(review.After.Data.Zones))
+	// Obtain the event ID with the latest timestamp in the review
+	eventIds := review.After.Data.Detections
+	sort.Sort(sort.Reverse(sort.StringSlice(eventIds)))
+	// Obtain associated thumbnail of the latest event ID
+	attachmentBase64, _ := l.attachmentBase64(eventIds[0])
+	attachmentType := ""
+	if attachmentBase64 != "" {
+		attachmentType = "image/jpeg"
+	}
+	return alert.Request{
+		Message:          message,
+		Title:            "Frigate",
+		Priority:         toJsonNumber(l.Config.Alert.Priority),
+		Token:            l.Config.Alert.Token,
+		User:             l.Config.Alert.User,
+		URL:              l.Config.Frigate.ExternalUrl,
+		URLTitle:         "Open Frigate",
+		AttachmentBase64: attachmentBase64,
+		AttachmentType:   attachmentType,
+	}
+}
+
+// sendAlert sends a pushover alert based on the provided request.
 func (l *listener) sendAlert(request alert.Request) (*rawResponse, int, error) {
 	method := "POST"
 	client := &http.Client{

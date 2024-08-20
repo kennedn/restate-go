@@ -13,7 +13,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
-	common "github.com/kennedn/restate-go/internal/device/alert/common"
+	alert "github.com/kennedn/restate-go/internal/device/alert/common"
 
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
@@ -86,7 +86,7 @@ func mockAlertServer(t *testing.T, serverConfigPath string) *httptest.Server {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := common.Request{}
+		request := alert.Request{}
 
 		rawBody, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -285,81 +285,193 @@ func TestListeners(t *testing.T) {
 
 func TestListen(t *testing.T) {
 	logging.SetLogLevel(logging.Error)
-	t.Run("listen_test", func(t *testing.T) {
-		// Setup wait group to wait for mqtt callback instead of immediatly returning
-		var wg sync.WaitGroup
-		wg.Add(1)
-
-		payload := []byte(`{"type":"new","before":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"},"after":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"}}`)
-		configFile, err := os.ReadFile("testdata/alertConfig/single_device_config.yaml")
-		if err != nil {
-			t.Fatalf("Could not read config file")
-		}
-
-		configMap := config.Config{}
-
-		if err := yaml.Unmarshal(configFile, &configMap); err != nil {
-			t.Fatalf("Could not read config file")
-		}
-		mockClient := &mockMqttClient{
-			subscribeFunc: func(client mqtt.Client, callback mqtt.MessageHandler) {
-				// Mark wait group as complete
-				defer wg.Done()
-				callback(client, &mockMessage{
-					payload: payload,
-				})
+	testCases := []struct {
+		name                 string
+		configPath           string
+		thumbnailPath        string
+		mqttPayload          []byte
+		expectedThumbnailUrl string
+		expectedRequest      alert.Request
+		expectedError        error
+		expectedAlertHit     int
+		expectedThumbnailHit int
+	}{
+		{
+			name:                 "no_error",
+			configPath:           "testdata/alertConfig/single_device_config.yaml",
+			thumbnailPath:        "testdata/serverConfig/thumbnail.jpg",
+			mqttPayload:          []byte(`{"type":"new","before":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"},"after":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"}}`),
+			expectedThumbnailUrl: "/api/events/1723938588.335444-ctmuov/thumbnail.jpg",
+			expectedRequest: alert.Request{
+				Message:          "Person detected at Front Enterance",
+				Title:            "Frigate",
+				Priority:         "0",
+				Token:            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+				User:             "",
+				URL:              "http://test.url",
+				URLTitle:         "Open Frigate",
+				AttachmentBase64: "/9j/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/yQALCAABAAEBAREA/8wABgAQEAX/2gAIAQEAAD8A0s8g/9k=",
+				AttachmentType:   "image/jpeg",
 			},
-		}
+			expectedError:        nil,
+			expectedAlertHit:     1,
+			expectedThumbnailHit: 1,
+		},
+		{
+			name:                 "no_device_in_config",
+			configPath:           "testdata/alertConfig/no_device_config.yaml",
+			thumbnailPath:        "testdata/serverConfig/thumbnail.jpg",
+			mqttPayload:          []byte(`{"type":"new","before":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"},"after":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"}}`),
+			expectedRequest:      alert.Request{},
+			expectedThumbnailUrl: "/api/events/1723938588.335444-ctmuov/thumbnail.jpg",
+			expectedError:        errors.New("no listeners found in config"),
+			expectedAlertHit:     0,
+			expectedThumbnailHit: 0,
+		},
+		{
+			name:                 "frigate_server_404",
+			configPath:           "testdata/alertConfig/single_device_config.yaml",
+			thumbnailPath:        "testdata/serverConfig/does_not_exist.jpg",
+			mqttPayload:          []byte(`{"type":"new","before":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"},"after":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"}}`),
+			expectedThumbnailUrl: "/api/events/1723938588.335444-ctmuov/thumbnail.jpg",
+			expectedRequest: alert.Request{
+				Message:          "Person detected at Front Enterance",
+				Title:            "Frigate",
+				Priority:         "0",
+				Token:            "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+				User:             "",
+				URL:              "http://test.url",
+				URLTitle:         "Open Frigate",
+				AttachmentBase64: "",
+				AttachmentType:   "",
+			},
+			expectedError:        nil,
+			expectedAlertHit:     1,
+			expectedThumbnailHit: 1,
+		},
+		{
+			name:                 "malformed_payload",
+			configPath:           "testdata/alertConfig/single_device_config.yaml",
+			thumbnailPath:        "testdata/serverConfig/thumbnail.jpg",
+			mqttPayload:          []byte(`{"type":"new",mb-front_garden-1723938590.336533-y0wa6z.webp"}}`),
+			expectedThumbnailUrl: "/api/events/1723938588.335444-ctmuov/thumbnail.jpg",
+			expectedRequest:      alert.Request{},
+			expectedError:        nil,
+			expectedAlertHit:     0,
+			expectedThumbnailHit: 0,
+		},
+	}
 
-		_, ls, _ := listeners(&configMap, mockClient)
-		l := ls[0]
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Setup wait group to wait for mqtt callback instead of immediatly returning
+			var wg sync.WaitGroup
+			wg.Add(1)
 
-		expectedUrlPath := "/api/events/1723938588.335444-ctmuov/thumbnail.jpg"
-		thumbnailPath := "testdata/serverConfig/thumbnail.jpg"
-		frigateServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != expectedUrlPath {
-				t.Fatalf("Unexpected URL path provided for call. Expected: %s, Got: %s", expectedUrlPath, r.URL.Path)
+			var testError error
+			alertHit := 0
+			thumbnailHit := 0
+
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						testError = errors.New("panic occurred")
+					}
+				}()
+
+				configFile, err := os.ReadFile(tc.configPath)
+				if err != nil {
+					testError = err
+					return
+				}
+
+				configMap := config.Config{}
+
+				if err := yaml.Unmarshal(configFile, &configMap); err != nil {
+					testError = err
+					return
+				}
+				mockClient := &mockMqttClient{
+					subscribeFunc: func(client mqtt.Client, callback mqtt.MessageHandler) {
+						// Mark wait group as complete
+						defer wg.Done()
+						callback(client, &mockMessage{
+							payload: tc.mqttPayload,
+						})
+					},
+				}
+
+				_, ls, err := listeners(&configMap, mockClient)
+				if err != nil {
+					testError = err
+					return
+				}
+				l := ls[0]
+
+				frigateServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					thumbnailHit++
+					if r.URL.Path != tc.expectedThumbnailUrl {
+						testError = err
+						return
+					}
+					http.ServeFile(w, r, tc.thumbnailPath)
+				}))
+				defer frigateServer.Close()
+
+				serverConfigPath := "testdata/serverConfig/alert_responses.yaml"
+				serverConfigFile, err := os.ReadFile(serverConfigPath)
+				if err != nil {
+					testError = err
+					return
+				}
+
+				serverConfig := &serverConfig{}
+				if err := yaml.Unmarshal(serverConfigFile, &serverConfig); err != nil {
+					testError = err
+					return
+				}
+				alertServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					alertHit++
+					receivedRequest := alert.Request{}
+
+					rawBody, err := io.ReadAll(r.Body)
+					if err != nil {
+						testError = err
+						return
+					}
+
+					if err := json.Unmarshal(rawBody, &receivedRequest); err != nil {
+						testError = err
+						return
+					}
+
+					assert.Equal(t, tc.expectedRequest, receivedRequest)
+
+					resp := findCode("normal", serverConfig)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(resp.HttpCode)
+					w.Write([]byte(resp.Json))
+				}))
+				defer alertServer.Close()
+				l.Config.Frigate.URL = frigateServer.URL
+				l.Config.Alert.URL = alertServer.URL
+				go l.Listen()
+
+				// Await the mqtt callback firing
+				wg.Wait()
+			}()
+
+			assert.Equal(t, tc.expectedThumbnailHit, thumbnailHit)
+			assert.Equal(t, tc.expectedAlertHit, alertHit)
+
+			if tc.expectedError != nil {
+				assert.EqualError(t, testError, tc.expectedError.Error())
+			} else if testError != nil {
+				t.Fatalf("Unexpected error: %v", testError)
 			}
-			http.ServeFile(w, r, thumbnailPath)
-		}))
 
-		serverConfigPath := "testdata/serverConfig/alert_responses.yaml"
-		serverConfigFile, err := os.ReadFile(serverConfigPath)
-		if err != nil {
-			t.Fatalf("Could not read serverConfigPath")
-		}
-
-		serverConfig := &serverConfig{}
-		if err := yaml.Unmarshal(serverConfigFile, &serverConfig); err != nil {
-			t.Fatalf("Could not parse serverConfigPath")
-		}
-		alertServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			request := common.Request{}
-
-			rawBody, err := io.ReadAll(r.Body)
-			if err != nil {
-				t.Fatalf("Could not read request body")
-			}
-
-			if err := json.Unmarshal(rawBody, &request); err != nil {
-				t.Fatalf("Could not parse request body")
-			}
-
-			resp := findCode("normal", serverConfig)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(resp.HttpCode)
-			w.Write([]byte(resp.Json))
-
-		}))
-		defer frigateServer.Close()
-		defer alertServer.Close()
-		l.Config.Frigate.URL = frigateServer.URL
-		l.Config.Alert.URL = alertServer.URL
-		l.Listen()
-
-		// Await the mqtt callback firing
-		wg.Wait()
-	})
+		})
+	}
 }
 
 // func TestHandlers(t *testing.T) {
