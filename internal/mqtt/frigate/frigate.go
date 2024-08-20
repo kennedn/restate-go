@@ -62,7 +62,7 @@ type listenerConfig struct {
 	Client  mqtt.Client
 	Timeout uint `yaml:"timeoutMs"`
 	MQTT    struct {
-		URL  string `yaml:"url"`
+		Host string `yaml:"url"`
 		Port int    `yaml:"port"`
 	} `yaml:"mqtt"`
 	Alert struct {
@@ -72,7 +72,8 @@ type listenerConfig struct {
 		Priority int    `yaml:"priority"`
 	} `yaml:"alert"`
 	Frigate struct {
-		URL string `yaml:"url"`
+		URL         string `yaml:"url"`
+		externalUrl string `yaml:"externalUrl"`
 	}
 }
 
@@ -131,7 +132,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 			continue
 		}
 
-		if listenerConfig.Name == "" || listenerConfig.Timeout == 0 || listenerConfig.MQTT.URL == "" || listenerConfig.Frigate.URL == "" || listenerConfig.Alert.URL == "" {
+		if listenerConfig.Name == "" || listenerConfig.Timeout == 0 || listenerConfig.MQTT.Host == "" || listenerConfig.Frigate.URL == "" || listenerConfig.Alert.URL == "" {
 			logging.Log(logging.Info, "Unable to load device due to missing parameters")
 			continue
 		}
@@ -140,9 +141,13 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 			listenerConfig.MQTT.Port = 1883
 		}
 
+		if listenerConfig.Frigate.externalUrl == "" {
+			listenerConfig.Frigate.externalUrl = listenerConfig.Frigate.URL
+		}
+
 		if client == nil {
 			clientOpts := mqtt.NewClientOptions()
-			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.URL, listenerConfig.MQTT.Port))
+			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
 			clientOpts.SetClientID("restate-go")
 			client = mqtt.NewClient(clientOpts)
 			token := client.Connect()
@@ -221,7 +226,7 @@ func (l *listener) createAlertRequest(review *review) alert.Request {
 		Priority:         toJsonNumber(l.Config.Alert.Priority),
 		Token:            l.Config.Alert.Token,
 		User:             l.Config.Alert.User,
-		URL:              l.Config.Frigate.URL,
+		URL:              l.Config.Frigate.externalUrl,
 		URLTitle:         "Open Frigate",
 		AttachmentBase64: attachmentBase64,
 		AttachmentType:   attachmentType,
