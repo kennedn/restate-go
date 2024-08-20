@@ -166,7 +166,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 	}
 
 	if len(listeners) == 0 {
-		return nil, []listener{}, errors.New("no devices found in config")
+		return nil, []listener{}, errors.New("no listeners found in config")
 	}
 
 	return &base, listeners, nil

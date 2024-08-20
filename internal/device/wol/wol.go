@@ -45,7 +45,7 @@ func routes(config *config.Config) (*base, []router.Route, error) {
 
 	base := base{
 		udpAddr: &net.UDPAddr{
-			IP:   net.ParseIP("192.168.1.254"),
+			IP:   net.ParseIP("192.168.1.255"),
 			Port: 9,
 		},
 	}
