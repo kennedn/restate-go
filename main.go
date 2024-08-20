@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/gorilla/mux"
 	config "github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	"github.com/kennedn/restate-go/internal/device"
@@ -31,25 +32,30 @@ func main() {
 	devices := &device.Devices{}
 
 	routes, err := devices.Routes(&configMap)
+	var r *mux.Router
 	if err != nil {
-		logging.Log(logging.Error, "Failed to start server: %v", err)
-		os.Exit(1)
-	}
-
-	r := router.NewRouter(routes)
-	if r == nil {
-		logging.Log(logging.Error, "Failed to create router")
-		os.Exit(1)
+		logging.Log(logging.Info, err.Error())
+	} else {
+		r = router.NewRouter(routes)
+		if r == nil {
+			logging.Log(logging.Error, "Failed to create router")
+			os.Exit(1)
+		}
 	}
 
 	frigate := &frigate.Device{}
 	listeners, err := frigate.Listeners(&configMap)
 	if err != nil {
-		logging.Log(logging.Error, err.Error())
-		os.Exit(1)
+		logging.Log(logging.Info, err.Error())
+	} else {
+		for _, listener := range listeners {
+			listener.Listen()
+		}
 	}
-	for _, listener := range listeners {
-		listener.Listen()
+
+	if len(routes) == 0 && len(listeners) == 0 {
+		logging.Log(logging.Error, "No devices or listeners provided, nothing left to do")
+		os.Exit(1)
 	}
 
 	logging.Log(logging.Info, "Server listening on :8080")
