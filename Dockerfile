@@ -1,6 +1,5 @@
 FROM scionproto/docker-caps as caps
 
-# Use the UBI9 as the base image
 FROM golang:latest
 
 # Set the working directory to /app
@@ -12,6 +11,9 @@ COPY . .
 # Build the Go program
 RUN go mod download
 RUN go build -o restate main.go
+
+# Run unit tests
+RUN go test ./...
 
 RUN chmod 775 /app/restate
 COPY --from=caps /bin/setcap /bin

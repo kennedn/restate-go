@@ -1,4 +1,5 @@
 # restate-go
+
 A cloudless home automation solution powered by Golang.
 
 Currently supported device types:
@@ -10,17 +11,18 @@ Currently supported device types:
 |snowdon| Control Snowdon II soundbars with the [Snowdon-II-wifi](https://github.com/kennedn/Snowdon-II-Wifi) mod|
 |tvcom|Control LG5000 TVs over a [websocket serial bridge](https://github.com/kennedn/pico-ws-uart/)|
 |wol|Control Wake-On-Lan enabled devices, power state can be toggled on devices utilising [Action-On-LAN](https://github.com/kennedn/Action-On-LAN)|
+|frigate|Subscribes to the `frigate/reviews` topic and forwards any alerts to [Pushover](https://pushover.net/api#messages)|
 
-# Configuration
+## Configuration
 
 | Parameter     | Description                                      |
 | ------------- | ------------------------------------------------ |
 | `apiVersion`  | version string to be prepended to all endpoint routes |
 | `devices`     | array of device objects |
 
-## devices
+### devices
 
-### alert
+#### alert
 
 | Parameter     | Description                                      |
 | ------------- | ------------------------------------------------ |
@@ -29,8 +31,7 @@ Currently supported device types:
 | `token`       | Pushover application token. |
 | `user`        | Pushover user token. |
 
-
-### meross
+#### meross
 
 | Parameter     | Description                                      |
 | ------------- | ------------------------------------------------ |
@@ -39,7 +40,7 @@ Currently supported device types:
 | `timeoutMs`   | Timeout value in milliseconds for communication. |
 | `host`        | IP address of the device.                      |
 
-### snowdon
+#### snowdon
 
 | Parameter     | Description                                      |
 | ------------- | ------------------------------------------------ |
@@ -47,7 +48,7 @@ Currently supported device types:
 | `timeoutMs`   | Timeout value in milliseconds for communication. |
 | `host`        | IP address of the Snowdon device.      |
 
-### tvcom
+#### tvcom
 
 | Parameter     | Description                                      |
 | ------------- | ------------------------------------------------ |
@@ -55,8 +56,7 @@ Currently supported device types:
 | `timeoutMs`   | Timeout value in milliseconds for communication. |
 | `host`        | IP address of the tvcom websocket bridge         |
 
-
-### wol
+#### wol
 
 | Parameter     | Description                                      |
 | ------------- | ------------------------------------------------ |
@@ -65,7 +65,22 @@ Currently supported device types:
 | `host`        | IP address of the target machine.               |
 | `macAddress`  | MAC address of the target machine.              |
 
-# Example
+#### frigate
+
+| Parameter         | Description                                            |
+| ----------------- | ------------------------------------------------------ |
+| `name`            | Unique identifier for the frigate device.              |
+| `timeoutMs`       | Timeout value in milliseconds for communication.       |
+| `mqtt.host`       | IP address of the MQTT broker used by frigate.         |
+| `mqtt.port`       | Port of the MQTT broker used by frigate. (default 1883)|
+| `alert.url`       | URL for Pushover API, can be pointed at an [alert forwarder](#alert) or the official Pushover API |
+| `alert.token`     | Pushover application token. (default "")               |
+| `alert.user`      | Pushover user token. (default "")                      |
+| `alert.priority`  | Priority level for the alert. (default 0)              |
+| `frigate.url`     | URL for the Frigate service.                           |
+| `frigate.externalUrl` | External URL for accessing Frigate. (default `frigate.url`) |
+
+## Example
 
 ```yaml
 apiVersion: v2
@@ -104,5 +119,18 @@ devices:
     timeoutMs: 5000
     token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     user: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+- type: frigate
+  config:
+    name: frigate
+    timeoutMs: 3000
+    mqtt:
+      host: mosquitto.cluster.local
+    alert:
+      url: https://api.pushover.net/1/messages.json
+      token: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      user: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    frigate:
+        url: http://frigate.cluster.local
+        externalUrl: https://frigate.example.com
 
 ```

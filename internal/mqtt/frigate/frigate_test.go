@@ -29,96 +29,6 @@ type serverConfig struct {
 	Codes []code
 }
 
-func findCode(name string, serverConfig *serverConfig) *code {
-	for _, s := range serverConfig.Codes {
-		if s.Name == name {
-			return &s
-		}
-	}
-	return nil
-}
-
-func mockFrigateServer(t *testing.T, thumbnailPath string) *httptest.Server {
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, thumbnailPath)
-
-		// rawBody, err := io.ReadAll(r.Body)
-		// if err != nil {
-		// 	t.Fatalf("Could not read request body")
-		// }
-
-		// if err := json.Unmarshal(rawBody, &request); err != nil {
-		// 	t.Fatalf("Could not parse request body")
-		// }
-
-		// resp := findCode("normal", serverConfig)
-		// if request.Message == "error" {
-		// 	resp = findCode("internal-error", serverConfig)
-		// } else if request.Token == "error" {
-		// 	resp = findCode("bad-token", serverConfig)
-		// } else if request.User == "error" {
-		// 	resp = findCode("bad-user", serverConfig)
-		// } else if request.Priority.String() != "" {
-		// 	priority, err := request.Priority.Int64()
-		// 	if err != nil || priority < -2 || priority > 2 {
-		// 		resp = findCode("bad-priority", serverConfig)
-		// 	}
-		// }
-		// w.Header().Set("Content-Type", "application/json")
-		// w.WriteHeader(resp.HttpCode)
-		// w.Write([]byte(resp.Json))
-
-	}))
-
-	return server
-}
-
-func mockAlertServer(t *testing.T, serverConfigPath string) *httptest.Server {
-	serverConfigFile, err := os.ReadFile(serverConfigPath)
-	if err != nil {
-		t.Fatalf("Could not read serverConfigPath")
-	}
-
-	serverConfig := &serverConfig{}
-	if err := yaml.Unmarshal(serverConfigFile, &serverConfig); err != nil {
-		t.Fatalf("Could not parse serverConfigPath")
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := alert.Request{}
-
-		rawBody, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("Could not read request body")
-		}
-
-		if err := json.Unmarshal(rawBody, &request); err != nil {
-			t.Fatalf("Could not parse request body")
-		}
-
-		resp := findCode("normal", serverConfig)
-		// if request.Message == "error" {
-		// 	resp = findCode("internal-error", serverConfig)
-		// } else if request.Token == "error" {
-		// 	resp = findCode("bad-token", serverConfig)
-		// } else if request.User == "error" {
-		// 	resp = findCode("bad-user", serverConfig)
-		// } else if request.Priority.String() != "" {
-		// 	priority, err := request.Priority.Int64()
-		// 	if err != nil || priority < -2 || priority > 2 {
-		// 		resp = findCode("bad-priority", serverConfig)
-		// 	}
-		// }
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.HttpCode)
-		w.Write([]byte(resp.Json))
-
-	}))
-
-	return server
-}
-
 type mockMqttClient struct {
 	subscribeFunc func(client mqtt.Client, callback mqtt.MessageHandler)
 }
@@ -215,6 +125,15 @@ func (m *mockMessage) Payload() []byte {
 // Ack performs the acknowledgment callback
 func (m *mockMessage) Ack() {
 	m.once.Do(m.ack)
+}
+
+func findCode(name string, serverConfig *serverConfig) *code {
+	for _, s := range serverConfig.Codes {
+		if s.Name == name {
+			return &s
+		}
+	}
+	return nil
 }
 
 func TestListeners(t *testing.T) {
@@ -364,7 +283,7 @@ func TestListen(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Setup wait group to wait for mqtt callback instead of immediatly returning
+			// Setup wait group to wait for mqtt callback instead of immediately returning
 			var wg sync.WaitGroup
 			wg.Add(1)
 
@@ -372,13 +291,16 @@ func TestListen(t *testing.T) {
 			alertHit := 0
 			thumbnailHit := 0
 
+			// Run test in an anonymous function to capture error for assertion
 			func() {
+				// Capture error in the case of a panic
 				defer func() {
 					if r := recover(); r != nil {
 						testError = errors.New("panic occurred")
 					}
 				}()
 
+				// Read the config file
 				configFile, err := os.ReadFile(tc.configPath)
 				if err != nil {
 					testError = err
@@ -391,6 +313,8 @@ func TestListen(t *testing.T) {
 					testError = err
 					return
 				}
+
+				// Create a mock mqtt client, Upon topic subscription, immediately calls the user provided callback with the payload under test
 				mockClient := &mockMqttClient{
 					subscribeFunc: func(client mqtt.Client, callback mqtt.MessageHandler) {
 						// Mark wait group as complete
@@ -401,15 +325,20 @@ func TestListen(t *testing.T) {
 					},
 				}
 
+				// Call the listeners function to get the listener objects
 				_, ls, err := listeners(&configMap, mockClient)
 				if err != nil {
 					testError = err
 					return
 				}
+
+				// Get the first listener object
 				l := ls[0]
 
+				// Create a mock frigate server to serve a thumbnail image
 				frigateServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					thumbnailHit++
+					// Assert that the request path matches the expected thumbnail url
 					if r.URL.Path != tc.expectedThumbnailUrl {
 						testError = err
 						return
@@ -418,6 +347,7 @@ func TestListen(t *testing.T) {
 				}))
 				defer frigateServer.Close()
 
+				// Load dummy alert responses for mock alert server
 				serverConfigPath := "testdata/serverConfig/alert_responses.yaml"
 				serverConfigFile, err := os.ReadFile(serverConfigPath)
 				if err != nil {
@@ -430,6 +360,7 @@ func TestListen(t *testing.T) {
 					testError = err
 					return
 				}
+				// Create a mock alert server to capture the alert request and respond appropriately
 				alertServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					alertHit++
 					receivedRequest := alert.Request{}
@@ -445,6 +376,7 @@ func TestListen(t *testing.T) {
 						return
 					}
 
+					// Assert that the requests JSON data matches the expected format
 					assert.Equal(t, tc.expectedRequest, receivedRequest)
 
 					resp := findCode("normal", serverConfig)
@@ -461,9 +393,11 @@ func TestListen(t *testing.T) {
 				wg.Wait()
 			}()
 
+			// Assert the amount of times that the alert and thumbnail servers were hit by the listener
 			assert.Equal(t, tc.expectedThumbnailHit, thumbnailHit)
 			assert.Equal(t, tc.expectedAlertHit, alertHit)
 
+			// Assert the error returned by the test
 			if tc.expectedError != nil {
 				assert.EqualError(t, testError, tc.expectedError.Error())
 			} else if testError != nil {
@@ -473,196 +407,3 @@ func TestListen(t *testing.T) {
 		})
 	}
 }
-
-// func TestHandlers(t *testing.T) {
-// 	logging.SetLogLevel(logging.Error)
-// 	testCases := []struct {
-// 		name         string
-// 		method       string
-// 		url          string
-// 		data         []byte
-// 		serverConfig string
-// 		alertConfig  string
-// 		expectedCode int
-// 		expectedBody string
-// 	}{
-// 		{
-// 			name:         "no_error",
-// 			method:       "POST",
-// 			url:          "/alert/test1?message=test",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 200,
-// 			expectedBody: `{"message":"OK"}`,
-// 		},
-// 		{
-// 			name:         "no_error_json",
-// 			method:       "POST",
-// 			url:          "/alert/test2",
-// 			data:         []byte(`{"message": "test"}`),
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 200,
-// 			expectedBody: `{"message":"OK"}`,
-// 		},
-// 		{
-// 			name:         "get_device_request",
-// 			method:       "GET",
-// 			url:          "/alert/test1",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 405,
-// 			expectedBody: `{"message":"Method Not Allowed"}`,
-// 		},
-// 		{
-// 			name:         "get_base_request",
-// 			method:       "GET",
-// 			url:          "/alert/",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 200,
-// 			expectedBody: `{"message":"OK","data":["test1","test2"]}`,
-// 		},
-// 		{
-// 			name:         "get_base_request_single_device",
-// 			method:       "GET",
-// 			url:          "/alert/",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/single_device_config.yaml",
-// 			expectedCode: 404,
-// 			expectedBody: "404 page not found\n",
-// 		},
-// 		{
-// 			name:         "unsupported_base_method",
-// 			method:       "POST",
-// 			url:          "/alert/",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 405,
-// 			expectedBody: `{"message":"Method Not Allowed"}`,
-// 		},
-// 		{
-// 			name:         "malformed_json_body",
-// 			method:       "POST",
-// 			url:          "/alert/test1",
-// 			data:         []byte(`not_json`),
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 400,
-// 			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
-// 		},
-// 		{
-// 			name:         "malformed_query_string",
-// 			method:       "POST",
-// 			url:          "/alert/test1?monkeytest",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 400,
-// 			expectedBody: `{"message":"Malformed or empty query string"}`,
-// 		},
-// 		{
-// 			name:         "missing_message_variable",
-// 			method:       "POST",
-// 			url:          "/alert/test1",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 400,
-// 			expectedBody: `{"message":"Invalid Parameter: message"}`,
-// 		},
-// 		{
-// 			name:         "invalid_user_variable",
-// 			method:       "POST",
-// 			url:          "/alert/test1?message=test&user=error",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 400,
-// 			expectedBody: `{"message":"user identifier is not a valid user, group, or subscribed user key, see https://pushover.net/api#identifiers"}`,
-// 		},
-// 		{
-// 			name:         "invalid_token_variable",
-// 			method:       "POST",
-// 			url:          "/alert/test1?message=test&token=error",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 400,
-// 			expectedBody: `{"message":"application token is invalid, see https://pushover.net/api"}`,
-// 		},
-// 		{
-// 			name:         "invalid_priority_variable",
-// 			method:       "POST",
-// 			url:          "/alert/test1?message=test&priority=3",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 400,
-// 			expectedBody: `{"message":"priority is invalid, see https://pushover.net/api#priority"}`,
-// 		},
-// 		{
-// 			name:         "internal_server_error",
-// 			method:       "POST",
-// 			url:          "/alert/test1?message=error",
-// 			data:         nil,
-// 			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-// 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
-// 			expectedCode: 500,
-// 			expectedBody: `{"message":"Internal Server Error"}`,
-// 		},
-// 	}
-
-// 	for _, tc := range testCases {
-// 		t.Run(tc.name, func(t *testing.T) {
-// 			alertConfigFile, err := os.ReadFile(tc.alertConfig)
-// 			if err != nil {
-// 				t.Fatalf("Could not read alert input")
-// 			}
-
-// 			alertConfig := config.Config{}
-
-// 			if err := yaml.Unmarshal(alertConfigFile, &alertConfig); err != nil {
-// 				t.Fatalf("Could not read alert input")
-// 			}
-
-// 			base, routes, err := routes(&alertConfig)
-
-// 			if err != nil {
-// 				t.Fatalf("routes returned an error: %v", err)
-// 			}
-// 			router := mux.NewRouter()
-// 			for _, r := range routes {
-// 				router.HandleFunc(r.Path, r.Handler)
-// 			}
-
-// 			server := setupHTTPServer(t, tc.serverConfig)
-// 			for _, d := range base.Devices {
-// 				d.Base.URL = server.URL
-// 			}
-
-// 			defer server.Close()
-// 			recorder := httptest.NewRecorder()
-
-// 			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
-// 			if tc.data != nil {
-// 				request.Header.Set("Content-Type", "application/json")
-// 			}
-
-// 			router.ServeHTTP(recorder, request)
-
-// 			if recorder.Code != tc.expectedCode {
-// 				t.Fatalf("Unexpected HTTP status code. Expected: %d, Got: %d", tc.expectedCode, recorder.Code)
-// 			}
-
-// 			if recorder.Body.String() != tc.expectedBody {
-// 				t.Fatalf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
-// 			}
-// 		})
-// 	}
-// }

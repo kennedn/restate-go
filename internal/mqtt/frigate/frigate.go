@@ -109,42 +109,52 @@ func (d *Device) Listeners(config *config.Config) ([]listener, error) {
 	_, listeners, err := listeners(config, nil)
 	return listeners, err
 }
+
+// listeners is a function that creates one or more MQTT listeners
+// It returns the base object and a slice of listeners.
 func listeners(config *config.Config, client mqtt.Client) (*base, []listener, error) {
 	listeners := []listener{}
 	base := base{}
+
+	// Iterate through each device in the configuration
 	for _, d := range config.Devices {
 		if d.Type != "frigate" {
 			continue
 		}
+
 		listenerConfig := listenerConfig{}
 		listener := listener{
 			Base: base,
 		}
 
+		// Marshal the device config to YAML
 		yamlConfig, err := yaml.Marshal(d.Config)
 		if err != nil {
 			logging.Log(logging.Info, "Unable to marshal device config")
 			continue
 		}
 
+		// Unmarshal the YAML config into the listenerConfig struct
 		if err := yaml.Unmarshal(yamlConfig, &listenerConfig); err != nil {
 			logging.Log(logging.Info, "Unable to unmarshal device config")
 			continue
 		}
 
+		// Check for missing parameters in the listenerConfig
 		if listenerConfig.Name == "" || listenerConfig.Timeout == 0 || listenerConfig.MQTT.Host == "" || listenerConfig.Frigate.URL == "" || listenerConfig.Alert.URL == "" {
 			logging.Log(logging.Info, "Unable to load device due to missing parameters")
 			continue
 		}
 
+		// Set default values for optional parameters
 		if listenerConfig.MQTT.Port == 0 {
 			listenerConfig.MQTT.Port = 1883
 		}
-
 		if listenerConfig.Frigate.ExternalUrl == "" {
 			listenerConfig.Frigate.ExternalUrl = listenerConfig.Frigate.URL
 		}
 
+		// Create MQTT client if not provided
 		if client == nil {
 			clientOpts := mqtt.NewClientOptions()
 			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
@@ -156,15 +166,21 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 				continue
 			}
 		}
+
+		// Set the MQTT client in the listenerConfig
 		listenerConfig.Client = client
 
+		// Set the listenerConfig in the listener
 		listener.Config = &listenerConfig
+
+		// Append the listener to the base object and the listeners slice
 		base.Listeners = append(base.Listeners, &listener)
 		listeners = append(listeners, listener)
 
 		logging.Log(logging.Info, "Setup device \"%s\"", listener.Config.Name)
 	}
 
+	// Check if any listeners were created
 	if len(listeners) == 0 {
 		return nil, []listener{}, errors.New("no listeners found in config")
 	}
@@ -186,6 +202,7 @@ func (l *listener) Listen() {
 			return
 		}
 
+		// Return if this is not a new alert or an upgrade from detection to alert
 		if !((review.Type == "new" && review.After.Severity == "alert") ||
 			(review.Type == "update" && review.Before.Severity == "detection" && review.After.Severity == "alert")) {
 			return
@@ -250,7 +267,7 @@ func (l *listener) createAlertRequest(review *review) alert.Request {
 	// Obtain the event ID with the latest timestamp in the review
 	eventIds := review.After.Data.Detections
 	sort.Sort(sort.Reverse(sort.StringSlice(eventIds)))
-	// Obtain associated thumbnail of the latest event ID
+	// Obtain associated thumbnail of the latest event ID based on timestamp
 	attachmentBase64, _ := l.attachmentBase64(eventIds[0])
 	attachmentType := ""
 	if attachmentBase64 != "" {
