@@ -12,3 +12,4 @@ devices:
     frigate:
       url: http://192.0.2.0
       externalUrl: http://test.url
+      cacheEvents: true

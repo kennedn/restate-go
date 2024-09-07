@@ -79,6 +79,8 @@ Currently supported device types:
 | `alert.priority`  | Priority level for the alert. (default 0)              |
 | `frigate.url`     | URL for the Frigate service.                           |
 | `frigate.externalUrl` | External URL for accessing Frigate. (default `frigate.url`) |
+| `frigate.cacheEvents` | Cache clips from frigate events locally |
+| `frigate.cachePath` | Path to cache frigate event clips to (default /tmp/cache) |
 
 ## Example
 

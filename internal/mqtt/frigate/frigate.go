@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -45,6 +48,41 @@ type detail struct {
 	} `json:"data"`
 }
 
+type event struct {
+	Area               json.Number `json:"area"`
+	Box                []float64   `json:"box"`
+	Camera             string      `json:"camera"`
+	Data               eventData   `json:"data"`
+	DetectorType       string      `json:"detector_type"`
+	EndTime            float64     `json:"end_time"`
+	FalsePositive      bool        `json:"false_positive"`
+	HasClip            bool        `json:"has_clip"`
+	HasSnapshot        bool        `json:"has_snapshot"`
+	ID                 string      `json:"id"`
+	Label              string      `json:"label"`
+	ModelHash          string      `json:"model_hash"`
+	ModelType          string      `json:"model_type"`
+	PlusID             *string     `json:"plus_id"`
+	Ratio              json.Number `json:"ratio"`
+	Region             []float64   `json:"region"`
+	RetainIndefinitely bool        `json:"retain_indefinitely"`
+	Score              *float64    `json:"score"`
+	StartTime          float64     `json:"start_time"`
+	SubLabel           *string     `json:"sub_label"`
+	Thumbnail          string      `json:"thumbnail"`
+	TopScore           *float64    `json:"top_score"`
+	Zones              []string    `json:"zones"`
+}
+
+type eventData struct {
+	Attributes []string  `json:"attributes"`
+	Box        []float64 `json:"box"`
+	Region     []float64 `json:"region"`
+	Score      float64   `json:"score"`
+	TopScore   float64   `json:"top_score"`
+	Type       string    `json:"type"`
+}
+
 type rawResponse struct {
 	Status int      `json:"status"`
 	Errors []string `json:"errors,omitempty"`
@@ -74,6 +112,8 @@ type listenerConfig struct {
 	Frigate struct {
 		URL         string `yaml:"url"`
 		ExternalUrl string `yaml:"externalUrl"`
+		CacheEvents bool   `yaml:"cacheEvents"`
+		CachePath   string `yaml:"cachePath"`
 	} `yaml:"frigate"`
 }
 
@@ -88,7 +128,7 @@ func toJsonNumber(value any) json.Number {
 	return json.Number(fmt.Sprintf("%d", value))
 }
 
-func cleanString(str string) string {
+func humanizeString(str string) string {
 	strArr := []string{}
 	for _, word := range strings.Split(str, "_") {
 		strArr = append(strArr, cases.Title(language.English).String(word))
@@ -96,12 +136,16 @@ func cleanString(str string) string {
 	return strings.Join(strArr, " ")
 }
 
-func joinStringSlice(str []string) string {
+func joinStringSlice(str []string, seperator string, humanize bool) string {
 	strArr := []string{}
 	for _, s := range str {
-		strArr = append(strArr, cleanString(s))
+		if humanize {
+			strArr = append(strArr, humanizeString(s))
+		} else {
+			strArr = append(strArr, s)
+		}
 	}
-	return strings.Join(strArr, " and ")
+	return strings.Join(strArr, seperator)
 }
 
 // Create mqtt Listeners from a config
@@ -153,6 +197,9 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		if listenerConfig.Frigate.ExternalUrl == "" {
 			listenerConfig.Frigate.ExternalUrl = listenerConfig.Frigate.URL
 		}
+		if listenerConfig.Frigate.CacheEvents && listenerConfig.Frigate.CachePath == "" {
+			listenerConfig.Frigate.CachePath = "/tmp/cache"
+		}
 
 		// Create MQTT client if not provided
 		if client == nil {
@@ -160,11 +207,13 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
 			clientOpts.SetClientID("restate-go")
 			client = mqtt.NewClient(clientOpts)
-			token := client.Connect()
-			if err = mqtt.WaitTokenTimeout(token, time.Duration(listenerConfig.Timeout)*time.Millisecond); err != nil {
-				logging.Log(logging.Info, err.Error())
-				continue
-			}
+		}
+
+		// Attempt to connect to the MQTT broker with a timeout
+		token := client.Connect()
+		if err = mqtt.WaitTokenTimeout(token, time.Duration(listenerConfig.Timeout)*time.Millisecond); err != nil {
+			logging.Log(logging.Info, err.Error())
+			continue
 		}
 
 		// Set the MQTT client in the listenerConfig
@@ -188,6 +237,50 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 	return &base, listeners, nil
 }
 
+func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
+	review := review{}
+	if err := json.Unmarshal(message.Payload(), &review); err != nil {
+		logging.Log(logging.Error, "Failed to unmarshal MQTT message: %v", err)
+		return
+	}
+
+	// Download a copy of each detection at the end of a given event for restic backup
+	if l.Config.Frigate.CacheEvents && review.Type == "end" {
+		// Download each detection in parallel
+		var wg sync.WaitGroup
+		// Parallel downloads can saturate IO, so create a ballpark timeout based on the number of detections to give downloads a chance to complete
+		timeout := time.Duration(int(l.Config.Timeout)*(len(review.After.Data.Detections)+1)) * time.Millisecond
+		for _, eventId := range review.After.Data.Detections {
+			wg.Add(1)
+			go func(eventId string) {
+				defer wg.Done()
+				err := l.downloadEvent(eventId, review.After.Severity, timeout)
+				if err != nil {
+					logging.Log(logging.Error, "Failed to download event %s: %v", eventId, err)
+				} else {
+					logging.Log(logging.Info, "Successfully downloaded event %s", eventId)
+				}
+			}(eventId)
+
+		}
+		wg.Wait()
+		// Remove clips that no longer have an assosiated event in frigate
+		l.removeOldClips()
+		return
+	}
+
+	// Return if this is not a new alert or an upgrade from detection to alert
+	if !((review.Type == "new" && review.After.Severity == "alert") ||
+		(review.Type == "update" && review.Before.Severity == "detection" && review.After.Severity == "alert")) {
+		return
+	}
+
+	// Process the event and create alert request
+	alertRequest := l.createAlertRequest(&review)
+
+	_, _, _ = l.sendAlert(alertRequest)
+}
+
 // Subscribe to frigate reviews topic and process review messages.
 func (l *listener) Listen() {
 	if l.Config.Client == nil {
@@ -195,33 +288,148 @@ func (l *listener) Listen() {
 		return
 	}
 
-	token := l.Config.Client.Subscribe("frigate/reviews", 0, func(client mqtt.Client, message mqtt.Message) {
-		review := review{}
-		if err := json.Unmarshal(message.Payload(), &review); err != nil {
-			logging.Log(logging.Error, "Failed to unmarshal MQTT message: %v", err)
-			return
-		}
+	// Configure callback for frigate reviews topic
+	token := l.Config.Client.Subscribe("frigate/reviews", 0, l.subscriptionCallback)
 
-		// Return if this is not a new alert or an upgrade from detection to alert
-		if !((review.Type == "new" && review.After.Severity == "alert") ||
-			(review.Type == "update" && review.Before.Severity == "detection" && review.After.Severity == "alert")) {
-			return
-		}
-
-		// Process the event and create alert request
-		alertRequest := l.createAlertRequest(&review)
-
-		_, _, _ = l.sendAlert(alertRequest)
-
-	})
-	// Avoid having to mock token in unit tests
-	if token == nil {
-		return
-	}
 	// Check that subscription to topic occured
 	if err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond); err != nil {
 		logging.Log(logging.Error, "Failed to subscribe to MQTT topic: %v", token.Error())
 	}
+}
+
+// Remove old clips that no longer have an associated event in frigate
+func (l *listener) removeOldClips() error {
+	// Retrieve all events currently in frigate database
+	url := fmt.Sprintf("%s/api/events", l.Config.Frigate.URL)
+	client := &http.Client{
+		Timeout: time.Duration(l.Config.Timeout) * time.Millisecond,
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to get events: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to get events: received status code %d", resp.StatusCode)
+	}
+
+	// Unmarshal events
+	var events []event
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		return fmt.Errorf("failed to unmarshal events: %w", err)
+	}
+
+	// Create empty map of eventIdMap for quick lookup
+	eventIdMap := make(map[string]struct{})
+	for _, evt := range events {
+		eventIdMap[evt.ID] = struct{}{}
+	}
+
+	// List all files in the cache directory
+	files, err := os.ReadDir(l.Config.Frigate.CachePath)
+	if err != nil {
+		return fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	// Extract event IDs from filenames and compare with the event IDs from the endpoint
+	for _, file := range files {
+
+		if file.IsDir() {
+			continue
+		}
+
+		filename := file.Name()
+
+		// Check for .mp4 suffix
+		if !strings.HasSuffix(filename, ".mp4") {
+			continue
+		}
+
+		// Event ID should be part of the filename and separated by underscores
+		splitFilename := strings.Split(filename, "_")
+		if len(splitFilename) == 0 {
+			continue
+		}
+
+		eventID := splitFilename[len(splitFilename)-1]
+		eventID = strings.TrimSuffix(eventID, filepath.Ext(eventID))
+		if _, exists := eventIdMap[eventID]; exists {
+			continue
+		}
+
+		// Remove the file if the event ID no longer exists
+		filePath := fmt.Sprintf("%s/%s", l.Config.Frigate.CachePath, filename)
+		if err := os.Remove(filePath); err != nil {
+			logging.Log(logging.Error, "Failed to remove file %s: %v", filePath, err)
+		} else {
+			logging.Log(logging.Info, "Removed file %s", filePath)
+		}
+	}
+
+	return nil
+}
+
+// Generate a unique filename from a frigate event and download the associated clip
+func (l *listener) downloadEvent(eventId string, severity string, timeout time.Duration) error {
+	// Obtain metadata of event to build filename
+	url := fmt.Sprintf("%s/api/events/%s", l.Config.Frigate.URL, eventId)
+	client := &http.Client{
+		Timeout: timeout,
+	}
+
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to get event: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to get event: received status code %d", resp.StatusCode)
+	}
+
+	var evt event
+	if err := json.NewDecoder(resp.Body).Decode(&evt); err != nil {
+		return fmt.Errorf("failed to unmarshal event: %w", err)
+	}
+
+	// Must immediatly close the body here as we will be reusing the client
+	resp.Body.Close()
+
+	// Generate unique human readable filename using event metadata
+	filename := fmt.Sprintf("%s_%s_%s_%s_%s.mp4",
+		time.Unix(int64(evt.StartTime), 0).Format(time.RFC3339),
+		severity,
+		evt.Label,
+		joinStringSlice(evt.Zones, "_", false),
+		eventId,
+	)
+
+	url = fmt.Sprintf("%s/api/events/%s/clip.mp4", l.Config.Frigate.URL, eventId)
+
+	resp, err = client.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download event: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download event: received status code %d", resp.StatusCode)
+	}
+
+	// Create the file and write the response body to it
+	file, err := os.Create(fmt.Sprintf("%s/%s", l.Config.Frigate.CachePath, filename))
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to write to file: %w", err)
+	}
+
+	return nil
 }
 
 // GET request to obtain the associated thumbnail image of a frigate eventID
@@ -263,7 +471,9 @@ func (l *listener) attachmentBase64(eventId string) (string, error) {
 // Generates a pushover alert request from a MQTT review message.
 func (l *listener) createAlertRequest(review *review) alert.Request {
 	// Create a message based on event details
-	message := fmt.Sprintf("%s detected at %s", joinStringSlice(review.After.Data.Objects), joinStringSlice(review.After.Data.Zones))
+	message := fmt.Sprintf("%s detected at %s",
+		joinStringSlice(review.After.Data.Objects, " and ", true),
+		joinStringSlice(review.After.Data.Zones, " and ", true))
 	// Obtain the event ID with the latest timestamp in the review
 	eventIds := review.After.Data.Detections
 	sort.Sort(sort.Reverse(sort.StringSlice(eventIds)))
