@@ -134,5 +134,6 @@ devices:
     frigate:
         url: http://frigate.cluster.local
         externalUrl: https://frigate.example.com
+        cacheEvents: false
 
 ```
