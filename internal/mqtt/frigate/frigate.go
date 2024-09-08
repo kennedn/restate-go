@@ -256,9 +256,9 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 				defer wg.Done()
 				err := l.downloadEvent(eventId, review.After.Severity, timeout)
 				if err != nil {
-					logging.Log(logging.Error, "Failed to download event %s: %v", eventId, err)
+					logging.Log(logging.Error, "Failed to cache event %s: %v", eventId, err)
 				} else {
-					logging.Log(logging.Info, "Successfully downloaded event %s", eventId)
+					logging.Log(logging.Info, "Cached event %s", eventId)
 				}
 			}(eventId)
 
