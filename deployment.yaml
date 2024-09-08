@@ -3,6 +3,8 @@ apiVersion: apps/v1
 metadata:
   name: restate-go
 spec:
+  strategy:
+    type: Recreate
   template:
     spec:
       hostNetwork: true
