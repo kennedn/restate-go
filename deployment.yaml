@@ -25,5 +25,5 @@ spec:
           defaultMode: 420
           secretName: restate-go-config
       - name: restate-go-cache-volume
-        PersistentVolumeClaim:
+        persistentVolumeClaim:
           claimName: restate-go-cache
