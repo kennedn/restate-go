@@ -17,8 +17,13 @@ spec:
         - name: restate-go-config-volume
           mountPath: /app/config.yaml
           subPath: config.yaml
+        - name: restate-go-cache-volume
+          mountPath: /tmp/cache
       volumes:
       - name: restate-go-config-volume
         secret:
           defaultMode: 420
           secretName: restate-go-config
+      - name: restate-go-cache-volume
+        PersistentVolumeClaim:
+          claimName: restate-go-cache
