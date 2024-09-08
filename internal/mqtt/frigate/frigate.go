@@ -265,7 +265,10 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 		}
 		wg.Wait()
 		// Remove clips that no longer have an assosiated event in frigate
-		l.removeOldClips()
+		err := l.removeOldClips()
+		if err != nil {
+			logging.Log(logging.Error, "Failed to remove old clips: %v", err)
+		}
 		return
 	}
 
@@ -300,7 +303,7 @@ func (l *listener) Listen() {
 // Remove old clips that no longer have an associated event in frigate
 func (l *listener) removeOldClips() error {
 	// Retrieve all events currently in frigate database
-	url := fmt.Sprintf("%s/api/events", l.Config.Frigate.URL)
+	url := fmt.Sprintf("%s/api/events?limit=-1", l.Config.Frigate.URL)
 	client := &http.Client{
 		Timeout: time.Duration(l.Config.Timeout) * time.Millisecond,
 	}
