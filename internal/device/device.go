@@ -9,6 +9,7 @@ import (
 	"github.com/kennedn/restate-go/internal/common/logging"
 	"github.com/kennedn/restate-go/internal/device/alert"
 	"github.com/kennedn/restate-go/internal/device/common"
+	"github.com/kennedn/restate-go/internal/device/hikvision"
 	"github.com/kennedn/restate-go/internal/device/meross"
 	"github.com/kennedn/restate-go/internal/device/snowdon"
 	"github.com/kennedn/restate-go/internal/device/tvcom"
@@ -31,6 +32,7 @@ var (
 		&snowdon.Device{},
 		&tvcom.Device{},
 		&wol.Device{},
+		&hikvision.Device{},
 	}
 )
 

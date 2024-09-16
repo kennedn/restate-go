@@ -144,7 +144,7 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 		}
 
 		routes = append(routes, router.Route{
-			Path:    meross.Name,
+			Path:    "/" + meross.Name,
 			Handler: meross.handler,
 		})
 
@@ -160,7 +160,7 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 	}
 
 	for i, r := range routes {
-		routes[i].Path = "/meross/" + r.Path
+		routes[i].Path = "/meross" + r.Path
 	}
 
 	routes = append(routes, router.Route{

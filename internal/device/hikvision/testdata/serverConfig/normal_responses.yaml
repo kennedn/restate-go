@@ -1,0 +1,6 @@
+get:
+  code: 200
+  json: '<?xml version="1.0" encoding="UTF-8"?>\n<SupplementLight version="2.0" xmlns="http://www.std-cgi.com/ver20/XMLSchema">\n<supplementLightMode>irLight</supplementLightMode>\n<mixedLightBrightnessRegulatMode>auto</mixedLightBrightnessRegulatMode>\n<whiteLightBrightness>100</whiteLightBrightness>\n<irLightBrightness>100</irLightBrightness>\n<EventIntelligenceModeCfg>\n<brightnessRegulatMode>auto</brightnessRegulatMode>\n<whiteLightBrightness>100</whiteLightBrightness>\n<irLightBrightness>100</irLightBrightness>\n</EventIntelligenceModeCfg>\n</SupplementLight>'
+put:
+  code: 200
+  json: '<?xml version="1.0" encoding="UTF-8"?>\n<ResponseStatus version="2.0" xmlns="http://www.std-cgi.com/ver20/XMLSchema">\n<requestURL></requestURL>\n<statusCode>1</statusCode>\n<statusString>OK</statusString>\n<subStatusCode>ok</subStatusCode>\n</ResponseStatus>'

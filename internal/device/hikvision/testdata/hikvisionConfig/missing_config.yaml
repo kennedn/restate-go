@@ -1,0 +1,6 @@
+apiVersion: v2
+devices:
+- type: hikvision
+  config:
+- type: hikvision
+  config:
