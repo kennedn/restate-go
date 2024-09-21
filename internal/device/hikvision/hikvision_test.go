@@ -134,7 +134,7 @@ func TestHandler(t *testing.T) {
 			serverConfig:    "testdata/serverConfig/normal_responses.yaml",
 			hikvisionConfig: "testdata/hikvisionConfig/normal_config.yaml",
 			expectedCode:    200,
-			expectedBody:    `{"message":"OK","data":"irLight"}`,
+			expectedBody:    `{"message":"OK","data":{"onoff":"on","supplementlightmode":"irLight"}}`,
 		},
 		{
 			name:            "toggle_no_error",
@@ -244,7 +244,7 @@ func TestHandler(t *testing.T) {
 			serverConfig:    "testdata/serverConfig/normal_responses.yaml",
 			hikvisionConfig: "testdata/hikvisionConfig/normal_config.yaml",
 			expectedCode:    200,
-			expectedBody:    `{"message":"OK","data":{"devices":[{"name":"back_camera","status":"irLight"},{"name":"front_camera","status":"irLight"}]}}`,
+			expectedBody:    `{"message":"OK","data":{"devices":[{"name":"back_camera","status":{"onoff":"off","supplementlightmode":"irLight"}},{"name":"front_camera","status":{"onoff":"on","supplementlightmode":"irLight"}}]}}`,
 		},
 		{
 			name:            "multi_toggle_no_error",

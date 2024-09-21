@@ -73,8 +73,14 @@ type deviceValues struct {
 
 // base represents a list of Hikvision devices, endpoints and common configuration
 type base struct {
-	BaseTemplate string `yaml:"baseTemplate"`
-	Devices      []*hikvision
+	SupplementLightTemplate string `yaml:"supplementLightTemplate"`
+	IrcutTemplate           string `yaml:"IrcutTemplate"`
+	Devices                 []*hikvision
+}
+
+type statusResponse struct {
+	OnOff               string `json:"onoff"`
+	SupplementLightMode string `json:"supplementlightmode"`
 }
 
 type Device struct{}
@@ -89,7 +95,8 @@ func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 func routes(config *config.Config) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{
-		BaseTemplate: "<SupplementLight><supplementLightMode>%s</supplementLightMode></SupplementLight>",
+		SupplementLightTemplate: "<SupplementLight><supplementLightMode>%s</supplementLightMode></SupplementLight>",
+		IrcutTemplate:           "<IrcutFilter><IrcutFilterType>%s</IrcutFilterType></IrcutFilter>",
 	}
 
 	for _, d := range config.Devices {
@@ -217,7 +224,7 @@ func (m *hikvision) put(value string) error {
 		return errors.New("value is required")
 	}
 
-	payload := []byte(fmt.Sprintf(m.Base.BaseTemplate, value))
+	payload := []byte(fmt.Sprintf(m.Base.SupplementLightTemplate, value))
 	req, err := http.NewRequest("PUT", "http://"+m.Host+"/ISAPI/Image/channels/1/supplementLight", bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -238,6 +245,43 @@ func (m *hikvision) put(value string) error {
 	}
 
 	return nil
+}
+
+func (m *hikvision) ircutPut(filterType string) error {
+	if (filterType != "auto" && filterType != "night" && filterType != "day") || filterType == "" {
+		return errors.New("filterType must be auto, night or day")
+	}
+
+	client := &http.Client{
+		Timeout: time.Duration(m.Timeout) * time.Millisecond,
+	}
+
+	payload := []byte(fmt.Sprintf(m.Base.IrcutTemplate, filterType))
+	req, err := http.NewRequest("PUT", "http://"+m.Host+"/ISAPI/Image/channels/1/ircutFilter", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/xml")
+	req.SetBasicAuth(m.User, m.Password)
+
+	// Send the request and get the response
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return err
+	}
+
+	return nil
+
+}
+
+func (m *hikvision) supplementLightModeIsDefault(supplementLightMode string) bool {
+	return supplementLightMode == m.DefaultMode
 }
 
 // Handler is the HTTP handler for Hikvision device control.
@@ -287,25 +331,41 @@ func (m *hikvision) handler(w http.ResponseWriter, r *http.Request) {
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 			return
 		}
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", status.SupplementLightMode)
+		statusResp := statusResponse{
+			SupplementLightMode: status.SupplementLightMode,
+		}
+		if m.supplementLightModeIsDefault(status.SupplementLightMode) {
+			statusResp.OnOff = "off"
+		} else {
+			statusResp.OnOff = "on"
+		}
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", statusResp)
 		return
 	case "toggle":
 		if request.Value != "" && !validValue(request.Value) {
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: value", nil)
 			return
 		}
-
 		if request.Value == "" {
 			status, err = m.get()
 			if err != nil {
 				httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 				return
 			}
-			if m.DefaultMode == status.SupplementLightMode {
+			if m.supplementLightModeIsDefault(status.SupplementLightMode) {
 				request.Value = "colorVuWhiteLight"
 			} else {
 				request.Value = m.DefaultMode
 			}
+		}
+		irCutFilterType := "auto"
+		if request.Value == "colorVuWhiteLight" {
+			irCutFilterType = "night"
+		}
+		err = m.ircutPut(irCutFilterType)
+		if err != nil {
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+			return
 		}
 
 		err = m.put(request.Value)
@@ -360,9 +420,15 @@ func (b *base) multiHTTP(devices []*deviceValues, method string) chan *namedStat
 			if method == "GET" {
 				status, err = d.Device.get()
 			} else if method == "PUT" {
-				err = d.Device.put(d.Value)
+				irCutFilterType := "auto"
+				if d.Value == "colorVuWhiteLight" {
+					irCutFilterType = "night"
+				}
+				err = d.Device.ircutPut(irCutFilterType)
+				if err == nil {
+					err = d.Device.put(d.Value)
+				}
 			}
-
 			if err != nil {
 				responses <- &response
 				return
@@ -370,7 +436,15 @@ func (b *base) multiHTTP(devices []*deviceValues, method string) chan *namedStat
 			if status == nil {
 				response.Status = "OK"
 			} else {
-				response.Status = status.SupplementLightMode
+				statusResp := statusResponse{
+					SupplementLightMode: status.SupplementLightMode,
+				}
+				if d.Device.supplementLightModeIsDefault(status.SupplementLightMode) {
+					statusResp.OnOff = "off"
+				} else {
+					statusResp.OnOff = "on"
+				}
+				response.Status = statusResp
 			}
 			responses <- &response
 		}(d, method)
@@ -480,13 +554,19 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 				}
 				d := b.getDevice(r.Name)
 
-				supplementLightMode, ok := r.Status.(string)
-				if !ok {
+				statusBytes, err := json.Marshal(r.Status)
+				if err != nil {
 					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 					return
 				}
 
-				if supplementLightMode == d.DefaultMode {
+				response := statusResponse{}
+				if err := json.Unmarshal(statusBytes, &response); err != nil {
+					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+					return
+				}
+
+				if d.supplementLightModeIsDefault(response.SupplementLightMode) {
 					valueTally++
 				}
 
