@@ -327,6 +327,10 @@ func (l *listener) removeOldClips() error {
 	// Create empty map of eventIdMap for quick lookup
 	eventIdMap := make(map[string]struct{})
 	for _, evt := range events {
+        // Skip adding events that exist but no longer contain a clip
+        if !evt.HasClip {
+            continue
+        }
 		eventIdMap[evt.ID] = struct{}{}
 	}
 
