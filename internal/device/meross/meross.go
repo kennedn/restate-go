@@ -44,6 +44,10 @@ type namedStatus struct {
 // rawStatus represents the raw status response from a Meross device.
 type rawStatus struct {
 	Payload struct {
+		Error struct {
+			Code   int64  `json:"code,omitempty"`
+			Detail string `json:"detail,omitempty"`
+		} `json:"error,omitempty"`
 		All struct {
 			Digest struct {
 				Togglex []struct {
@@ -75,6 +79,7 @@ type meross struct {
 	Host       string `yaml:"host"`
 	DeviceType string `yaml:"deviceType"`
 	Timeout    uint   `yaml:"timeoutMs"`
+	Key        string `yaml:"key,omitempty"`
 	Base       base
 }
 
@@ -228,7 +233,7 @@ func (m *meross) post(method string, endpoint endpoint, value json.Number) (*sta
 
 	// Newer firmware (6.2.5) requires a unique nonce for messageId
 	messageId := randomHex(16)
-	sign := md5SumString(fmt.Sprintf("%s%d", messageId, 0))
+	sign := md5SumString(fmt.Sprintf("%s%s%d", messageId, m.Key, 0))
 
 	jsonPayload := []byte(fmt.Sprintf(m.Base.BaseTemplate, messageId, method, endpoint.Namespace, sign, payload))
 
@@ -261,6 +266,10 @@ func (m *meross) post(method string, endpoint endpoint, value json.Number) (*sta
 
 	if err := json.Unmarshal(body, &rawResponse); err != nil {
 		return nil, err
+	}
+
+	if rawResponse.Payload.Error.Code != 0 {
+		return nil, errors.New(rawResponse.Payload.Error.Detail)
 	}
 
 	response := status{
@@ -328,6 +337,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	case "status":
 		status, err = m.post("GET", *m.getEndpoint("status"), "")
 		if err != nil {
+			logging.Log(logging.Error, err.Error())
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 			return
 		}
@@ -338,6 +348,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 		if request.Value == "" {
 			status, err = m.post("GET", *m.getEndpoint("status"), "")
 			if err != nil {
+				logging.Log(logging.Error, err.Error())
 				httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 				return
 			}
@@ -347,6 +358,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 
 		_, err = m.post("SET", *endpoint, request.Value)
 		if err != nil {
+			logging.Log(logging.Error, err.Error())
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 			return
 		}
@@ -354,11 +366,13 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	case "fade":
 		_, err = m.post("SET", *m.getEndpoint("toggle"), toJsonNumber(0))
 		if err != nil {
+			logging.Log(logging.Error, err.Error())
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 			return
 		}
 		_, err = m.post("SET", *endpoint, toJsonNumber(-1))
 		if err != nil {
+			logging.Log(logging.Error, err.Error())
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 			return
 		}
@@ -370,6 +384,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		_, err = m.post("SET", *endpoint, request.Value)
 		if err != nil {
+			logging.Log(logging.Error, err.Error())
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 			return
 		}
@@ -540,11 +555,13 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 				var status *status
 				yamlConfig, err := yaml.Marshal(r.Status)
 				if err != nil {
+					logging.Log(logging.Error, err.Error())
 					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 					return
 				}
 
 				if err := yaml.Unmarshal(yamlConfig, &status); err != nil {
+					logging.Log(logging.Error, err.Error())
 					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
 					return
 				}

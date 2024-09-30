@@ -8,7 +8,7 @@ endpoints:
   minValue: 0
   maxValue: 1
   namespace: Appliance.Control.ToggleX
-  template: '{"togglex":{"onoff": %s}}'
+  template: '{"togglex":{"channel":0,"onoff": %s}}'
 - code: status
   supportedDevices: 
   - bulb
