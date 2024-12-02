@@ -488,6 +488,7 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 
 	var devices []*meross
 	var endpoint *endpoint
+DUPLICATE_DEVICE:
 	for _, h := range hosts {
 		m := b.getDevice(h)
 		if m == nil {
@@ -499,6 +500,12 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 		if endpoint == nil {
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter for device '%s': code", m.Name), nil)
 			return
+		}
+
+		for _, device := range devices {
+			if m == device {
+				continue DUPLICATE_DEVICE
+			}
 		}
 
 		devices = append(devices, m)

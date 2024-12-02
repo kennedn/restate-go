@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,12 @@ import (
 	"github.com/gorilla/websocket"
 	"gopkg.in/yaml.v3"
 )
+
+// namedStatus associates a devices name with its status.
+type namedStatus struct {
+	Name   string         `json:"name"`
+	Status StatusResponse `json:"status"`
+}
 
 // status is a representation of the state of a bthome device
 type StatusResponse struct {
@@ -138,6 +145,63 @@ func (m *bthome) websocketConnectWithResponse() (*StatusResponse, error) {
 		return parseBTHomeData(bthomeData[3:])
 	}
 
+}
+
+// websocketWriteWithResponse connected to a websocket and sorts filters received data based on current devices mac
+// It returns the response or an error if the response is not received within the specified timeout.
+func (b *base) websocketConnectWithResponses(devices []*bthome) ([]*namedStatus, error) {
+	deviceStrings := map[string]string{}
+	statusResponses := []*namedStatus{}
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+devices[0].Host, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	conn.SetReadDeadline(time.Now().Add(time.Duration(devices[0].Timeout) * time.Millisecond))
+
+	for {
+		if len(deviceStrings) == len(devices) {
+			break
+		}
+
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			continue
+		}
+
+		hexString := string(message)
+		for _, device := range devices {
+			if !strings.HasPrefix(hexString, device.MacAddress) {
+				continue
+			}
+			// Skip MAC + D2 FC 40 of bthome packet
+			deviceStrings[device.Name] = hexString[18:]
+		}
+	}
+
+	for name, hexString := range deviceStrings {
+		bthomeData, err := hex.DecodeString(hexString)
+		if err != nil {
+			log.Printf("Invalid hex string: %v", err)
+			continue
+		}
+		status, err := parseBTHomeData(bthomeData)
+		if err != nil {
+			log.Printf("Invalid bthome data: %v", err)
+			continue
+		}
+
+		statusResponses = append(statusResponses, &namedStatus{
+			Name:   name,
+			Status: *status,
+		})
+	}
+
+	if len(statusResponses) == 0 {
+		return nil, errors.New("no devices could be parsed")
+	}
+	return statusResponses, nil
 }
 
 // Routes generates routes for bthome device control based on a provided configuration.
@@ -270,6 +334,16 @@ func (b *base) getDeviceNames() []string {
 	return names
 }
 
+// getDevice retrieves a bthome device by its name.
+func (b *base) getDevice(name string) *bthome {
+	for _, d := range b.Devices {
+		if d.Name == name {
+			return d
+		}
+	}
+	return nil
+}
+
 // Handler is the HTTP handler for handling requests to base route
 func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
@@ -282,8 +356,64 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodPost {
 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusMethodNotAllowed, "Method Not Allowed", nil)
 		return
 	}
+
+	request := device.Request{}
+
+	if r.Header.Get("Content-Type") == "application/json" {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed Or Empty JSON Body", nil)
+			return
+		}
+	} else {
+		if err := schema.NewDecoder().Decode(&request, r.URL.Query()); err != nil {
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed or empty query string", nil)
+			return
+		}
+	}
+
+	if request.Hosts == "" {
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: hosts", nil)
+		return
+	}
+
+	hosts := strings.Split(strings.ReplaceAll(request.Hosts, " ", ""), ",")
+
+	var devices []*bthome
+DUPLICATE_DEVICE:
+	for _, h := range hosts {
+		m := b.getDevice(h)
+		if m == nil {
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter: hosts (Device '%s' does not exist)", h), nil)
+			return
+		}
+		for _, device := range devices {
+			if m == device {
+				continue DUPLICATE_DEVICE
+			}
+		}
+		devices = append(devices, m)
+	}
+
+	status, err := b.websocketConnectWithResponses(devices)
+	if err != nil {
+		logging.Log(logging.Error, err.Error())
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		return
+	}
+	sort.SliceStable(status, func(i int, j int) bool {
+		return status[i].Name < status[j].Name
+	})
+
+	responseStruct := struct {
+		Devices []*namedStatus `json:"devices,omitempty"`
+	}{}
+
+	responseStruct.Devices = status
+
+	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", responseStruct)
+
 }
