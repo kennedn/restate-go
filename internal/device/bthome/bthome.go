@@ -117,41 +117,25 @@ func parseBTHomeData(data []byte) (*StatusResponse, error) {
 // websocketWriteWithResponse connected to a websocket and sorts filters received data based on current devices mac
 // It returns the response or an error if the response is not received within the specified timeout.
 func (m *bthome) websocketConnectWithResponse() (*StatusResponse, error) {
-	conn, _, err := websocket.DefaultDialer.Dial("ws://"+m.Host, nil)
+	status, err := m.Base.websocketConnectWithResponses([]*bthome{m})
 	if err != nil {
 		return nil, err
+
 	}
-	defer conn.Close()
-
-	conn.SetReadDeadline(time.Now().Add(time.Duration(m.Timeout) * time.Millisecond))
-
-	for {
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			continue
-		}
-
-		hexString := string(message)
-		if !strings.HasPrefix(hexString, m.MacAddress) {
-			continue
-		}
-
-		bthomeData, err := hex.DecodeString(hexString[12:])
-		if err != nil {
-			log.Printf("Invalid hex string: %v", err)
-			continue
-		}
-
-		return parseBTHomeData(bthomeData[3:])
-	}
-
+	return &status[0].Status, nil
 }
 
-// websocketWriteWithResponse connected to a websocket and sorts filters received data based on current devices mac
-// It returns the response or an error if the response is not received within the specified timeout.
+// websocketWriteWithResponses connected to a websocket and filters received data based on a list of bthome devices
+// It returns an array of namedStatus or an error if the response is not received within the specified timeout.
 func (b *base) websocketConnectWithResponses(devices []*bthome) ([]*namedStatus, error) {
+	macNames := map[string]string{}
 	deviceStrings := map[string]string{}
 	statusResponses := []*namedStatus{}
+
+	for _, device := range devices {
+		macNames[device.MacAddress] = device.Name
+	}
+
 	conn, _, err := websocket.DefaultDialer.Dial("ws://"+devices[0].Host, nil)
 	if err != nil {
 		return nil, err
@@ -171,12 +155,9 @@ func (b *base) websocketConnectWithResponses(devices []*bthome) ([]*namedStatus,
 		}
 
 		hexString := string(message)
-		for _, device := range devices {
-			if !strings.HasPrefix(hexString, device.MacAddress) {
-				continue
-			}
-			// Skip MAC + D2 FC 40 of bthome packet
-			deviceStrings[device.Name] = hexString[18:]
+		if deviceName, exists := macNames[hexString[:12]]; exists {
+			// Skip MAC + D2 FC 40 in bthome packet
+			deviceStrings[deviceName] = hexString[18:]
 		}
 	}
 
