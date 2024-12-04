@@ -151,7 +151,8 @@ func (b *base) websocketConnectWithResponses(devices []*bthome) ([]*namedStatus,
 
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			continue
+			// We probably hit read deadline, so just return
+			return nil, err
 		}
 
 		hexString := string(message)
