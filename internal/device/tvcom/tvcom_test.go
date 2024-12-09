@@ -109,7 +109,7 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 			testCode:         "kc",
 			testData:         "ff",
 			expectedResponse: []byte(""),
-			timeout:          1,
+			timeout:          0,
 			shouldPass:       false,
 		},
 		{
