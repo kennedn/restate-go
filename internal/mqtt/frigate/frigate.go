@@ -204,6 +204,8 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		// Create MQTT client if not provided
 		if client == nil {
 			clientOpts := mqtt.NewClientOptions()
+			// Ensure subscriptions are re-established upon reconnect
+			clientOpts.SetCleanSession(false)
 			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
 			clientOpts.SetClientID("restate-go")
 			client = mqtt.NewClient(clientOpts)
@@ -327,10 +329,10 @@ func (l *listener) removeOldClips() error {
 	// Create empty map of eventIdMap for quick lookup
 	eventIdMap := make(map[string]struct{})
 	for _, evt := range events {
-        // Skip adding events that exist but no longer contain a clip
-        if !evt.HasClip {
-            continue
-        }
+		// Skip adding events that exist but no longer contain a clip
+		if !evt.HasClip {
+			continue
+		}
 		eventIdMap[evt.ID] = struct{}{}
 	}
 
