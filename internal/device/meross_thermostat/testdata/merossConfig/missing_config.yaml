@@ -1,0 +1,6 @@
+apiVersion: v2
+devices:
+- type: meross
+  config:
+- type: meross
+  config:

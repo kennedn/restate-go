@@ -12,6 +12,8 @@ import (
 	"github.com/kennedn/restate-go/internal/device/common"
 	"github.com/kennedn/restate-go/internal/device/hikvision"
 	"github.com/kennedn/restate-go/internal/device/meross"
+	"github.com/kennedn/restate-go/internal/device/meross_radiator"
+	"github.com/kennedn/restate-go/internal/device/meross_thermostat"
 	"github.com/kennedn/restate-go/internal/device/snowdon"
 	"github.com/kennedn/restate-go/internal/device/tvcom"
 	"github.com/kennedn/restate-go/internal/device/wol"
@@ -30,6 +32,8 @@ var (
 	devices = []Device{
 		&alert.Device{},
 		&meross.Device{},
+		&meross_radiator.Device{},
+		&meross_thermostat.Device{},
 		&snowdon.Device{},
 		&tvcom.Device{},
 		&wol.Device{},

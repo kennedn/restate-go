@@ -1,0 +1,8 @@
+apiVersion: v2
+devices:
+- type: meross
+  config:
+    name: test1
+    deviceType: bulb
+    timeoutMs: 500
+    host: "127.0.0.1"

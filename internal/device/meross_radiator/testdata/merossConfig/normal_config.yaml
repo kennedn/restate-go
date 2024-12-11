@@ -1,0 +1,23 @@
+apiVersion: v2
+devices:
+- type: meross_thermostat
+  config:
+    name: office
+    deviceType: radiator
+    timeoutMs: 500
+    host: "192.168.1.170"
+    id: 03000BDF
+- type: meross
+  config:
+    name: test2
+    deviceType: socket
+    timeoutMs: 500
+    host: "127.0.0.2"
+- type: meross
+  config:
+    name: test3
+    deviceType: bulb
+    timeoutMs: 500
+    host: "127.0.0.3"
+- type: tvcom
+  config:
