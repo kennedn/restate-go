@@ -287,8 +287,7 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 }
 
 func (l *listener) connectionCallback(client mqtt.Client) {
-	logging.Log(logging.Info, "MQTT connected, subscribing to topics...")
-
+	logging.Log(logging.Info, "MQTT connected")
 	token := client.Subscribe("frigate/reviews", 0, l.subscriptionCallback)
 	if err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond); err != nil {
 		logging.Log(logging.Error, "Failed to subscribe to MQTT topic: %v", token.Error())
