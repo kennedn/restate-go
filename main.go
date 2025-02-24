@@ -47,10 +47,6 @@ func main() {
 	listeners, err := frigate.Listeners(&configMap)
 	if err != nil {
 		logging.Log(logging.Info, err.Error())
-	} else {
-		for _, listener := range listeners {
-			listener.Listen()
-		}
 	}
 
 	if len(routes) == 0 && len(listeners) == 0 {

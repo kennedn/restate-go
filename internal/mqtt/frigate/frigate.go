@@ -204,10 +204,10 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		// Create MQTT client if not provided
 		if client == nil {
 			clientOpts := mqtt.NewClientOptions()
-			// Ensure subscriptions are re-established upon reconnect
-			clientOpts.SetCleanSession(false)
 			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
 			clientOpts.SetClientID("restate-go")
+			clientOpts.SetOnConnectHandler(listener.connectionCallback)
+			clientOpts.SetConnectionLostHandler(listener.connectionLostCallback)
 			client = mqtt.NewClient(clientOpts)
 		}
 
@@ -286,20 +286,19 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 	_, _, _ = l.sendAlert(alertRequest)
 }
 
-// Subscribe to frigate reviews topic and process review messages.
-func (l *listener) Listen() {
-	if l.Config.Client == nil {
-		logging.Log(logging.Error, "MQTT client is not initialized")
-		return
-	}
+func (l *listener) connectionCallback(client mqtt.Client) {
+	logging.Log(logging.Info, "MQTT connected, subscribing to topics...")
 
-	// Configure callback for frigate reviews topic
-	token := l.Config.Client.Subscribe("frigate/reviews", 0, l.subscriptionCallback)
-
-	// Check that subscription to topic occured
+	token := client.Subscribe("frigate/reviews", 0, l.subscriptionCallback)
 	if err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond); err != nil {
 		logging.Log(logging.Error, "Failed to subscribe to MQTT topic: %v", token.Error())
+	} else {
+		logging.Log(logging.Info, "Successfully subscribed to MQTT topic")
 	}
+}
+
+func (l *listener) connectionLostCallback(_ mqtt.Client, err error) {
+	logging.Log(logging.Info, "MQTT connection lost: %v", err)
 }
 
 // Remove old clips that no longer have an associated event in frigate

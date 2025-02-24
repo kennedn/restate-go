@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/kennedn/restate-go/internal/common/config"
@@ -269,6 +270,8 @@ func TestListen(t *testing.T) {
 			// Setup wait group to wait for mqtt callback instead of immediately returning
 			var wg sync.WaitGroup
 			wg.Add(1)
+			// Make a channel to allow testing for stalled wg
+			done := make(chan struct{})
 
 			var testError error
 			alertHit := 0
@@ -376,10 +379,20 @@ func TestListen(t *testing.T) {
 				l.Config.Frigate.URL = frigateServer.URL
 				l.Config.Alert.URL = alertServer.URL
 				l.Config.Frigate.CachePath = cacheDir
-				go l.Listen()
+				go l.connectionCallback(mockClient)
 
 				// Await the mqtt callback firing
-				wg.Wait()
+				go func() {
+					defer close(done)
+					wg.Wait()
+				}()
+
+				select {
+				case <-done:
+					fmt.Println("WaitGroup completed successfully")
+				case <-time.After(1 * time.Second): // Timeout duration
+					t.Fatalf("%s didn't finish in time", tc.name)
+				}
 
 				// end events should end up with 1 file after downloadEvent is called and 0 after removeOldClips is called
 				files, err := os.ReadDir(cacheDir)

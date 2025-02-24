@@ -27,6 +27,7 @@ import (
 
 // status is a cut down rpresentation of the state of a Meross device, must be pointers to distinguish between unset and 0 value with omitempty
 type statusGet struct {
+	Id          *string      `json:"id"`
 	Onoff       *int64       `json:"onoff,omitempty"`
 	Mode        *int64       `json:"mode,omitempty"`
 	Online      *int64       `json:"online,omitempty"`
@@ -34,7 +35,8 @@ type statusGet struct {
 }
 
 type singleGet struct {
-	Value *int64 `json:"value,omitempty"`
+	Id    *string `json:"id"`
+	Value *int64  `json:"value,omitempty"`
 }
 
 type temperature struct {
@@ -107,12 +109,12 @@ type endpoint struct {
 
 // meross represents a Meross device configuration with name, host, device type, timeout, and base configuration.
 type meross struct {
-	Name       string `yaml:"name"`
-	Id         string `yaml:"id"`
-	Host       string `yaml:"host"`
-	DeviceType string `yaml:"deviceType"`
-	Timeout    uint   `yaml:"timeoutMs"`
-	Key        string `yaml:"key,omitempty"`
+	Name       string   `yaml:"name"`
+	Ids        []string `yaml:"ids"`
+	Host       string   `yaml:"host"`
+	DeviceType string   `yaml:"deviceType"`
+	Timeout    uint     `yaml:"timeoutMs"`
+	Key        string   `yaml:"key,omitempty"`
 	Base       base
 }
 
@@ -157,12 +159,14 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 		return nil, []router.Route{}, fmt.Errorf("unable to load internalConfigPath \"%s\"", internalConfigPath)
 	}
 
+	ids := map[string]meross{}
 	for _, d := range config.Devices {
-		if d.Type != "meross_radiator" {
-			continue
-		}
 		meross := meross{
 			Base: base,
+		}
+
+		if d.Type != "meross_radiator" {
+			continue
 		}
 
 		yamlConfig, err := yaml.Marshal(d.Config)
@@ -176,7 +180,7 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 			continue
 		}
 
-		if meross.Name == "" || meross.Host == "" || meross.DeviceType == "" || meross.Id == "" {
+		if meross.Name == "" || meross.Host == "" || meross.DeviceType == "" || len(meross.Ids) == 0 {
 			logging.Log(logging.Info, "Unable to load device due to missing parameters")
 			continue
 		}
@@ -188,7 +192,32 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 
 		base.Devices = append(base.Devices, &meross)
 
+		// Add ids and assosiated meross device to a map
+		for _, id := range meross.Ids {
+			if _, ok := ids[id]; ok {
+				continue
+			}
+			ids[id] = meross
+		}
+
 		logging.Log(logging.Info, "Found device \"%s\"", meross.Name)
+
+	}
+
+	// Iterate over collected ids to create pseudo devices that contain a single id
+	for id, meross := range ids {
+		m := meross
+		m.Name = id
+		m.Ids = []string{id}
+
+		routes = append(routes, router.Route{
+			Path:    "/" + m.Name,
+			Handler: m.handler,
+		})
+
+		base.Devices = append(base.Devices, &m)
+
+		logging.Log(logging.Info, "Found device \"%s\"", m.Name)
 	}
 
 	if len(routes) == 0 {
@@ -308,13 +337,25 @@ func (m *meross) post(method string, namespace string, payload string) (*rawStat
 	return m.Base.post(m.Host, method, namespace, payload, m.Key, m.Timeout)
 }
 
+// Build a payload for the IDs contained in a device
+func (m *meross) buildPayload(template string, value json.Number) string {
+	var payload strings.Builder
+	for i, id := range m.Ids {
+		payload.WriteString(fmt.Sprintf(template, id, string(value)))
+		if i < len(m.Ids)-1 {
+			payload.WriteString(",")
+		}
+	}
+	return payload.String()
+}
+
 // Handler is the HTTP handler for Meross device control.
 func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
 	var rawStatus *rawStatus
 	var payload string
-	var status any
+	var status []any
 	var endpoint *endpoint
 	var err error
 
@@ -366,7 +407,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	case "toggle":
 		if request.Value == "" {
 			endpoint = m.getEndpoint("status")
-			payload = fmt.Sprintf(endpoint.Template, m.Id, toJsonNumber(0))
+			payload = m.buildPayload(endpoint.Template, toJsonNumber(0))
 			rawStatus, err = m.post("GET", endpoint.Namespace, payload)
 			if err != nil {
 				logging.Log(logging.Error, err.Error())
@@ -378,7 +419,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		endpoint = m.getEndpoint("toggle")
-		payload = fmt.Sprintf(endpoint.Template, m.Id, request.Value)
+		payload = m.buildPayload(endpoint.Template, request.Value)
 		_, err = m.post("SET", endpoint.Namespace, payload)
 		if err != nil {
 			logging.Log(logging.Error, err.Error())
@@ -392,7 +433,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 			// Hacky way to keep templates consistant with two placeholders
 			request.Value = toJsonNumber(0)
 		}
-		payload = fmt.Sprintf(endpoint.Template, m.Id, request.Value)
+		payload = m.buildPayload(endpoint.Template, request.Value)
 		rawStatus, err = m.post(method, endpoint.Namespace, payload)
 		if err != nil {
 			logging.Log(logging.Error, err.Error())
@@ -407,34 +448,46 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 
 		switch endpoint.Code {
 		case "status":
-			deviceState := rawStatus.Payload.All[0]
-			heating := deviceState.Temperature.CurrentSet-deviceState.Temperature.Room > 0
-			openWindow := deviceState.Temperature.OpenWindow != 0
-			status = statusGet{
-				Onoff:  &deviceState.Togglex.Onoff,
-				Mode:   &deviceState.Mode.State,
-				Online: &deviceState.Online.Status,
-				Temperature: &temperature{
-					Current:    &deviceState.Temperature.Room,
-					Target:     &deviceState.Temperature.CurrentSet,
-					Heating:    &heating,
-					OpenWindow: &openWindow,
-				},
+			deviceStates := rawStatus.Payload.All
+			for i := range deviceStates {
+				heating := deviceStates[i].Temperature.CurrentSet-deviceStates[i].Temperature.Room > 0
+				openWindow := deviceStates[i].Temperature.OpenWindow != 0
+				status = append(status, &statusGet{
+					Id:     &deviceStates[i].ID,
+					Onoff:  &deviceStates[i].Togglex.Onoff,
+					Mode:   &deviceStates[i].Mode.State,
+					Online: &deviceStates[i].Online.Status,
+					Temperature: &temperature{
+						Current:    &deviceStates[i].Temperature.Room,
+						Target:     &deviceStates[i].Temperature.CurrentSet,
+						Heating:    &heating,
+						OpenWindow: &openWindow,
+					},
+				})
 			}
 		case "battery":
-			deviceState := rawStatus.Payload.Battery[0]
-			status = singleGet{
-				Value: &deviceState.Value,
+			deviceStates := rawStatus.Payload.Battery
+			for i := range deviceStates {
+				status = append(status, &singleGet{
+					Id:    &deviceStates[i].ID,
+					Value: &deviceStates[i].Value,
+				})
 			}
 		case "mode":
-			deviceState := rawStatus.Payload.Mode[0]
-			status = singleGet{
-				Value: &deviceState.State,
+			deviceStates := rawStatus.Payload.Mode
+			for i := range deviceStates {
+				status = append(status, &singleGet{
+					Id:    &deviceStates[i].ID,
+					Value: &deviceStates[i].State,
+				})
 			}
 		case "adjust":
-			deviceState := rawStatus.Payload.Adjust[0]
-			status = singleGet{
-				Value: &deviceState.Temperature,
+			deviceStates := rawStatus.Payload.Adjust
+			for i := range deviceStates {
+				status = append(status, &singleGet{
+					Id:    &deviceStates[i].ID,
+					Value: &deviceStates[i].Temperature,
+				})
 			}
 		default:
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusNotImplemented, "Not Implemented", nil)
@@ -470,301 +523,14 @@ func (b *base) getDevice(name string) *meross {
 // getDevice retrieves a Meross device by its ID.
 func (b *base) getDeviceById(id string) *meross {
 	for _, d := range b.Devices {
-		if d.Id == id {
-			return d
+		for _, deviceId := range d.Ids {
+			if deviceId == id {
+				return d
+			}
 		}
 	}
 	return nil
 }
-
-// Handler is the HTTP handler for handling requests to control multiple Meross devices.
-// func (b *base) handler(w http.ResponseWriter, r *http.Request) {
-// 	var jsonResponse []byte
-// 	var httpCode int
-
-// 	defer func() { device.JSONResponse(w, httpCode, jsonResponse) }()
-
-// 		if r.Method == http.MethodGet {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", b.getDeviceNames())
-// 			return
-// 		}
-
-// 		if r.Method != http.MethodPost {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusMethodNotAllowed, "Method Not Allowed", nil)
-// 			return
-// 		}
-
-// 		request := device.Request{}
-
-// 	if r.Header.Get("Content-Type") == "application/json" {
-// 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed Or Empty JSON Body", nil)
-// 			return
-// 		}
-// 	} else {
-// 		if err := schema.NewDecoder().Decode(&request, r.URL.Query()); err != nil {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed or empty query string", nil)
-// 			return
-// 		}
-// 	}
-
-// 	if request.Hosts == "" {
-// 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: hosts", nil)
-// 		return
-// 	}
-
-// 	hosts := strings.Split(strings.ReplaceAll(request.Hosts, " ", ""), ",")
-
-// 	var devices []*meross
-// 	var endpoint *endpoint
-// DUPLICATE_DEVICE:
-// 	for _, h := range hosts {
-// 		m := b.getDevice(h)
-// 		if m == nil {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter: hosts (Device '%s' does not exist)", h), nil)
-// 			return
-// 		}
-
-// 		endpoint = m.getEndpoint(request.Code)
-// 		if endpoint == nil {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter for device '%s': code", m.Name), nil)
-// 			return
-// 		}
-
-// 		for _, device := range devices {
-// 			if m == device {
-// 				continue DUPLICATE_DEVICE
-// 			}
-// 		}
-
-// 		devices = append(devices, m)
-// 	}
-
-// 	if request.Value != "" && endpoint.MaxValue != 0 {
-// 		valueInt64, err := request.Value.Int64()
-// 		if err != nil || valueInt64 > endpoint.MaxValue || valueInt64 < endpoint.MinValue {
-// 			errorMessage := fmt.Sprintf("Invalid Parameter: value (Min: %d, Max: %d)", endpoint.MinValue, endpoint.MaxValue)
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, errorMessage, nil)
-// 			return
-// 		}
-
-// 	}
-
-// 	switch endpoint.Code {
-// 	// case "status":
-// 	// 	responses := b.multiPost(devices, "GET", "status", "")
-
-// 	// 	responseStruct := struct {
-// 	// 		Devices []*namedStatus `json:"devices,omitempty"`
-// 	// 		Errors  []string       `json:"errors,omitempty"`
-// 	// 	}{}
-
-// 	// 	for r := range responses {
-// 	// 		if r.Status == nil {
-// 	// 			responseStruct.Errors = append(responseStruct.Errors, r.Name)
-// 	// 			continue
-// 	// 		}
-// 	// 		responseStruct.Devices = append(responseStruct.Devices, r)
-// 	// 	}
-
-// 	// 	sort.SliceStable(responseStruct.Devices, func(i int, j int) bool {
-// 	// 		return responseStruct.Devices[i].Name < responseStruct.Devices[j].Name
-// 	// 	})
-
-// 	// 	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", responseStruct)
-// 	// case "toggle":
-// 	// 	if request.Value == "" {
-// 	// 		endpoint = m.getEndpoint("status")
-// 	// 		payload = fmt.Sprintf(endpoint.Template, m.Id)
-// 	// 		rawStatus, err = m.post("GET", endpoint.Namespace, payload)
-// 	// 		if err != nil {
-// 	// 			logging.Log(logging.Error, err.Error())
-// 	// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 	// 			return
-// 	// 		}
-
-// 	// 		request.Value = toJsonNumber(1 - rawStatus.Payload.All[0].Togglex.Onoff)
-// 	// 	}
-
-// 	// 	endpoint = m.getEndpoint("toggle")
-// 	// 	payload = fmt.Sprintf(endpoint.Template, m.Id, request.Value)
-// 	// 	_, err = m.post("SET", endpoint.Namespace, payload)
-// 	// 	if err != nil {
-// 	// 		logging.Log(logging.Error, err.Error())
-// 	// 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 	// 		return
-// 	// 	}
-// 	case "toggle":
-// 		valueTally := int64(0)
-
-// 		if request.Value == "" {
-// 			request.Value = toJsonNumber(0)
-
-// 			responses := b.multiPost(devices, "GET", "status", "")
-// 			devices = nil
-
-// 			for r := range responses {
-// 				if r.Status == nil {
-// 					continue
-// 				}
-// 				// Capture non-errored devices
-// 				devices = append(devices, b.getDevice(r.Name))
-
-// 				var rawStatus *rawStatus
-// 				statusBytes, err := yaml.Marshal(r.Status)
-// 				if err != nil {
-// 					logging.Log(logging.Error, err.Error())
-// 					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 					return
-// 				}
-
-// 				if err := yaml.Unmarshal(statusBytes, &rawStatus); err != nil {
-// 					logging.Log(logging.Error, err.Error())
-// 					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 					return
-// 				}
-
-// 				// valueTally += rawStatus.Payload.All[0].
-// 			}
-
-// 			// Each device votes for next state, if most devices are on, all devices will be toggled off and vice versa
-// 			if len(devices) == 0 {
-// 				httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 				return
-// 			} else if valueTally <= int64(len(devices))/2 {
-// 				request.Value = toJsonNumber(1)
-// 			}
-// 		}
-
-// 		responses := b.multiPost(devices, "SET", "toggle", request.Value)
-
-// 		devices = nil
-// 		for r := range responses {
-// 			if r.Status == nil {
-// 				continue
-// 			}
-// 			devices = append(devices, b.getDevice(r.Name))
-// 		}
-
-// 		if len(devices) == 0 {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 		} else {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-// 		}
-// 	case "fade":
-// 		responses := b.multiPost(devices, "SET", "toggle", toJsonNumber(0))
-
-// 		devices = nil
-// 		for r := range responses {
-// 			if r.Status == nil {
-// 				continue
-// 			}
-// 			devices = append(devices, b.getDevice(r.Name))
-// 		}
-
-// 		if len(devices) == 0 {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 			return
-// 		}
-
-// 		responses = b.multiPost(devices, "SET", "fade", toJsonNumber(-1))
-
-// 		devices = nil
-// 		for r := range responses {
-// 			if r.Status == nil {
-// 				continue
-// 			}
-// 			devices = append(devices, b.getDevice(r.Name))
-// 		}
-
-// 		if len(devices) == 0 {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 		} else {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-// 		}
-
-// 	default:
-// 		if request.Value == "" {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: value", nil)
-// 			return
-// 		}
-
-// 		responses := b.multiPost(devices, "SET", request.Code, request.Value)
-
-// 		devices = nil
-// 		for r := range responses {
-// 			if r.Status == nil {
-// 				continue
-// 			}
-// 			devices = append(devices, b.getDevice(r.Name))
-// 		}
-
-// 		if len(devices) == 0 {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 		} else {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-// 		}
-// 	}
-// 	switch endpoint.Code {
-// 	default:
-// 		method := "SET"
-// 		if request.Value == "" {
-// 			method = "GET"
-// 			request.Value = toJsonNumber(0)
-// 		}
-// 		payload = fmt.Sprintf(endpoint.Template, m.Id, request.Value)
-// 		rawStatus, err = m.post(method, endpoint.Namespace, payload)
-// 		if err != nil {
-// 			logging.Log(logging.Error, err.Error())
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-// 			return
-// 		}
-
-// 		if method == "SET" {
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-// 			return
-// 		}
-
-// 		switch endpoint.Code {
-// 		case "status":
-// 			deviceState := rawStatus.Payload.All[0]
-// 			status = statusGet{
-// 				Onoff:  &deviceState.Togglex.Onoff,
-// 				Mode:   &deviceState.Mode.State,
-// 				Online: &deviceState.Online.Status,
-// 				Temperature: &temperature{
-// 					Current:    &deviceState.Temperature.Room,
-// 					Target:     &deviceState.Temperature.CurrentSet,
-// 					Heating:    &deviceState.Temperature.Heating,
-// 					OpenWindow: &deviceState.Temperature.OpenWindow,
-// 				},
-// 			}
-// 		case "battery":
-// 			deviceState := rawStatus.Payload.Battery[0]
-// 			status = singleGet{
-// 				Value: &deviceState.Value,
-// 			}
-// 		case "mode":
-// 			deviceState := rawStatus.Payload.Mode[0]
-// 			status = singleGet{
-// 				Value: &deviceState.State,
-// 			}
-// 		case "adjust":
-// 			deviceState := rawStatus.Payload.Adjust[0]
-// 			status = singleGet{
-// 				Value: &deviceState.Temperature,
-// 			}
-// 		default:
-// 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusNotImplemented, "Not Implemented", nil)
-// 			return
-// 		}
-
-// 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", status)
-// 		return
-// 	}
-
-// 	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-// }
 
 // Handler is the HTTP handler for Meross device control.
 func (b *base) handler(w http.ResponseWriter, r *http.Request) {
@@ -860,7 +626,7 @@ DUPLICATE_DEVICE:
 			endpoint = m.getEndpoint("status")
 			// Build array of devices to send to hub as a single post
 			for i, m := range devices {
-				payload.WriteString(fmt.Sprintf(endpoint.Template, m.Id, toJsonNumber(0)))
+				payload.WriteString(m.buildPayload(endpoint.Template, toJsonNumber(0)))
 				if i < len(devices)-1 {
 					payload.WriteString(",")
 				}
@@ -883,7 +649,7 @@ DUPLICATE_DEVICE:
 
 		endpoint = devices[0].getEndpoint("toggle")
 		for i, m := range devices {
-			payload.WriteString(fmt.Sprintf(endpoint.Template, m.Id, request.Value))
+			payload.WriteString(m.buildPayload(endpoint.Template, request.Value))
 			if i < len(devices)-1 {
 				payload.WriteString(",")
 			}
@@ -902,7 +668,7 @@ DUPLICATE_DEVICE:
 			request.Value = toJsonNumber(0)
 		}
 		for i, m := range devices {
-			payload.WriteString(fmt.Sprintf(endpoint.Template, m.Id, request.Value))
+			payload.WriteString(m.buildPayload(endpoint.Template, request.Value))
 			if i < len(devices)-1 {
 				payload.WriteString(",")
 			}
@@ -928,6 +694,7 @@ DUPLICATE_DEVICE:
 				status = append(status, &namedStatus{
 					Name: b.getDeviceById(deviceStates[i].ID).Name,
 					Status: &statusGet{
+						Id:     &deviceStates[i].ID,
 						Onoff:  &deviceStates[i].Togglex.Onoff,
 						Mode:   &deviceStates[i].Mode.State,
 						Online: &deviceStates[i].Online.Status,
@@ -946,6 +713,7 @@ DUPLICATE_DEVICE:
 				status = append(status, &namedStatus{
 					Name: b.getDeviceById(deviceStates[i].ID).Name,
 					Status: &singleGet{
+						Id:    &deviceStates[i].ID,
 						Value: &deviceStates[i].Value,
 					},
 				})
@@ -956,6 +724,7 @@ DUPLICATE_DEVICE:
 				status = append(status, &namedStatus{
 					Name: b.getDeviceById(deviceStates[i].ID).Name,
 					Status: singleGet{
+						Id:    &deviceStates[i].ID,
 						Value: &deviceStates[i].State,
 					},
 				})
@@ -966,6 +735,7 @@ DUPLICATE_DEVICE:
 				status = append(status, &namedStatus{
 					Name: b.getDeviceById(deviceStates[i].ID).Name,
 					Status: singleGet{
+						Id:    &deviceStates[i].ID,
 						Value: &deviceStates[i].Temperature,
 					},
 				})
