@@ -12,4 +12,5 @@ type Request struct {
 	AttachmentType   string      `json:"attachment_type,omitempty"`
 	URL              string      `json:"url,omitempty"`
 	URLTitle         string      `json:"url_title,omitempty"`
+	Sound            string      `json:"sound,omitempty"`
 }
