@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"time"
 
@@ -175,7 +176,7 @@ func (a *alert) handler(w http.ResponseWriter, r *http.Request) {
 
 	request := common.Request{}
 
-	if r.Header.Get("Content-Type") == "application/json" {
+	if mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mediaType == "application/json" {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed Or Empty JSON Body", nil)
 			return

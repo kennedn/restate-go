@@ -160,6 +160,7 @@ func TestHandlers(t *testing.T) {
 		alertConfig  string
 		expectedCode int
 		expectedBody string
+		contentType  string
 	}{
 		{
 			name:         "no_error",
@@ -170,6 +171,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 200,
 			expectedBody: `{"message":"OK"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "no_error_json",
@@ -180,6 +182,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 200,
 			expectedBody: `{"message":"OK"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "get_device_request",
@@ -190,6 +193,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 405,
 			expectedBody: `{"message":"Method Not Allowed"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "get_base_request",
@@ -200,6 +204,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 200,
 			expectedBody: `{"message":"OK","data":["test1","test2"]}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "get_base_request_single_device",
@@ -210,6 +215,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/single_device_config.yaml",
 			expectedCode: 404,
 			expectedBody: "404 page not found\n",
+			contentType:  "application/json",
 		},
 		{
 			name:         "unsupported_base_method",
@@ -220,6 +226,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 405,
 			expectedBody: `{"message":"Method Not Allowed"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "malformed_json_body",
@@ -230,6 +237,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 400,
 			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "malformed_query_string",
@@ -240,6 +248,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 400,
 			expectedBody: `{"message":"Malformed or empty query string"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "missing_message_variable",
@@ -250,6 +259,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 400,
 			expectedBody: `{"message":"Invalid Parameter: message"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "invalid_user_variable",
@@ -260,6 +270,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 400,
 			expectedBody: `{"message":"user identifier is not a valid user, group, or subscribed user key, see https://pushover.net/api#identifiers"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "invalid_token_variable",
@@ -270,6 +281,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 400,
 			expectedBody: `{"message":"application token is invalid, see https://pushover.net/api"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "invalid_priority_variable",
@@ -280,6 +292,7 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 400,
 			expectedBody: `{"message":"priority is invalid, see https://pushover.net/api#priority"}`,
+			contentType:  "application/json",
 		},
 		{
 			name:         "internal_server_error",
@@ -290,6 +303,18 @@ func TestHandlers(t *testing.T) {
 			alertConfig:  "testdata/alertConfig/normal_config.yaml",
 			expectedCode: 500,
 			expectedBody: `{"message":"Internal Server Error"}`,
+			contentType:  "application/json",
+		},
+		{
+			name:         "utf8 content type",
+			method:       "POST",
+			url:          "/alert/test2",
+			data:         []byte(`{"message": "test"}`),
+			serverConfig: "testdata/serverConfig/normal_responses.yaml",
+			alertConfig:  "testdata/alertConfig/normal_config.yaml",
+			expectedCode: 200,
+			expectedBody: `{"message":"OK"}`,
+			contentType:  "application/json; charset=utf-8",
 		},
 	}
 
@@ -326,7 +351,7 @@ func TestHandlers(t *testing.T) {
 
 			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
 			if tc.data != nil {
-				request.Header.Set("Content-Type", "application/json")
+				request.Header.Set("Content-Type", tc.contentType)
 			}
 
 			router.ServeHTTP(recorder, request)
