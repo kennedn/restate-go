@@ -379,6 +379,8 @@ func TestListen(t *testing.T) {
 				l.Config.Frigate.URL = frigateServer.URL
 				l.Config.Alert.URL = alertServer.URL
 				l.Config.Frigate.CachePath = cacheDir
+
+				// Trigger subscription logic by calling MQTT client connection callback
 				go l.connectionCallback(mockClient)
 
 				// Await the mqtt callback firing
@@ -390,7 +392,7 @@ func TestListen(t *testing.T) {
 				select {
 				case <-done:
 					fmt.Println("WaitGroup completed successfully")
-				case <-time.After(1 * time.Second): // Timeout duration
+				case <-time.After(100 * time.Millisecond): // Timeout duration
 					t.Fatalf("%s didn't finish in time", tc.name)
 				}
 

@@ -9,6 +9,7 @@ import (
 	"github.com/kennedn/restate-go/internal/common/logging"
 	"github.com/kennedn/restate-go/internal/device"
 	"github.com/kennedn/restate-go/internal/mqtt/frigate"
+	"github.com/kennedn/restate-go/internal/mqtt/thermostat"
 	"github.com/kennedn/restate-go/internal/router"
 	"gopkg.in/yaml.v3"
 )
@@ -43,14 +44,30 @@ func main() {
 		}
 	}
 
+	if len(routes) == 0 {
+		logging.Log(logging.Error, "No devices were parsed, exiting")
+		// os.Exit(1)
+	}
+
 	frigate := &frigate.Device{}
 	listeners, err := frigate.Listeners(&configMap)
 	if err != nil {
 		logging.Log(logging.Info, err.Error())
 	}
 
-	if len(routes) == 0 && len(listeners) == 0 {
-		logging.Log(logging.Error, "No devices or listeners provided, nothing left to do")
+	if len(listeners) == 0 {
+		logging.Log(logging.Error, "No listeners were parsed, exiting")
+		// os.Exit(1)
+	}
+
+	thermostat := &thermostat.Device{}
+	listeners_thermostat, err := thermostat.Listeners(&configMap)
+	if err != nil {
+		logging.Log(logging.Info, err.Error())
+	}
+
+	if len(listeners_thermostat) == 0 {
+		logging.Log(logging.Error, "No listeners were parsed, exiting")
 		os.Exit(1)
 	}
 
