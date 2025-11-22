@@ -25,87 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// status is a cut down rpresentation of the state of a Meross device, must be pointers to distinguish between unset and 0 value with omitempty
-type statusGet struct {
-	Id          *string      `json:"id"`
-	Onoff       *int64       `json:"onoff,omitempty"`
-	Mode        *int64       `json:"mode,omitempty"`
-	Online      *int64       `json:"online,omitempty"`
-	Temperature *temperature `json:"temperature,omitempty"`
-}
-
-type singleGet struct {
-	Id    *string `json:"id"`
-	Value *int64  `json:"value,omitempty"`
-}
-
-type temperature struct {
-	Current    *int64 `json:"current"`
-	Target     *int64 `json:"target"`
-	Heating    *bool  `json:"heating"`
-	OpenWindow *bool  `json:"openWindow"`
-}
-
-// namedStatus associates a devices name with its status.
-type namedStatus struct {
-	Name   string `json:"name"`
-	Status any    `json:"status"`
-}
-
-// rawStatus represents the raw status response from a Meross device.
-type rawStatus struct {
-	Payload struct {
-		Error struct {
-			Code   int64  `json:"code,omitempty"`
-			Detail string `json:"detail,omitempty"`
-		} `json:"error,omitempty"`
-		All []struct {
-			ID            string `json:"id"`
-			ScheduleBMode int64  `json:"scheduleBMode"`
-			Online        struct {
-				Status         int64 `json:"status"`
-				LastActiveTime int64 `json:"lastActiveTime"`
-			} `json:"online"`
-			Togglex struct {
-				Onoff int64 `json:"onoff"`
-			} `json:"togglex"`
-			TimeSync struct {
-				State int64 `json:"state"`
-			} `json:"timeSync"`
-			Mode struct {
-				State int64 `json:"state"`
-			} `json:"mode"`
-			Temperature struct {
-				Room       int64 `json:"room"`
-				CurrentSet int64 `json:"currentSet"`
-				Heating    int64 `json:"heating"`
-				OpenWindow int64 `json:"openWindow"`
-			} `json:"temperature"`
-		} `json:"all"`
-		Battery []struct {
-			ID    string `json:"id"`
-			Value int64  `json:"value"`
-		} `json:"battery"`
-		Mode []struct {
-			ID    string `json:"id"`
-			State int64  `json:"state"`
-		} `json:"mode"`
-		Adjust []struct {
-			ID          string `json:"id"`
-			Temperature int64  `json:"temperature"`
-		} `json:"adjust"`
-	} `json:"payload"`
-}
-
-// endpoint describes a Meross device control endpoint with code, supported devices, and other properties.
-type endpoint struct {
-	Code             string   `yaml:"code"`
-	SupportedDevices []string `yaml:"supportedDevices"`
-	MinValue         int64    `yaml:"minValue,omitempty"`
-	MaxValue         int64    `yaml:"maxValue,omitempty"`
-	Namespace        string   `yaml:"namespace"`
-	Template         string   `yaml:"template"`
-}
+// meross represents a Meross device configuration with name, host, device type, timeout, and base configuration.
 
 // meross represents a Meross device configuration with name, host, device type, timeout, and base configuration.
 type meross struct {
@@ -133,6 +53,11 @@ func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 	return routes, err
 }
 
+// Routes returns the router routes for this meross device.
+func (m *meross) Routes() []router.Route {
+	return []router.Route{{Path: "/" + m.Name, Handler: m.handler}}
+}
+
 // toJsonNumber converts a numeric value to a JSON number.
 func toJsonNumber(value any) json.Number {
 	return json.Number(fmt.Sprintf("%d", value))
@@ -144,19 +69,19 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 	base := base{}
 
 	if internalConfigPath == "" {
-		internalConfigPath = "./internal/device/meross_radiator/device.yaml"
-	}
-
-	internalConfigFile, err := os.ReadFile(internalConfigPath)
-	if err != nil {
-		return nil, []router.Route{}, err
-	}
-
-	if err := yaml.Unmarshal(internalConfigFile, &base); err != nil {
-		return nil, []router.Route{}, err
+		// Use embedded defaultBase (no runtime file dependency)
+		base = defaultBase
+	} else {
+		internalConfigFile, err := os.ReadFile(internalConfigPath)
+		if err != nil {
+			return nil, []router.Route{}, err
+		}
+		if err := yaml.Unmarshal(internalConfigFile, &base); err != nil {
+			return nil, []router.Route{}, err
+		}
 	}
 	if len(base.Endpoints) == 0 || base.BaseTemplate == "" {
-		return nil, []router.Route{}, fmt.Errorf("unable to load internalConfigPath \"%s\"", internalConfigPath)
+		return nil, []router.Route{}, fmt.Errorf("unable to load internal config")
 	}
 
 	ids := map[string]meross{}
@@ -185,10 +110,8 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 			continue
 		}
 
-		routes = append(routes, router.Route{
-			Path:    "/" + meross.Name,
-			Handler: meross.handler,
-		})
+		// delegate route creation to the device implementation
+		routes = append(routes, meross.Routes()...)
 
 		base.Devices = append(base.Devices, &meross)
 
@@ -210,10 +133,8 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 		m.Name = id
 		m.Ids = []string{id}
 
-		routes = append(routes, router.Route{
-			Path:    "/" + m.Name,
-			Handler: m.handler,
-		})
+		// delegate route creation to the device implementation
+		routes = append(routes, m.Routes()...)
 
 		base.Devices = append(base.Devices, &m)
 
@@ -252,10 +173,10 @@ func (m *meross) getCodes() []string {
 }
 
 // getEndpoint retrieves an endpoint configuration by its code.
-func (m *meross) getEndpoint(code string) *endpoint {
+func (m *meross) getEndpoint(code string) EndpointIF {
 	for _, e := range m.Base.Endpoints {
 		if code == e.Code && slices.Contains(e.SupportedDevices, m.DeviceType) {
-			return e
+			return getConcreteEndpoint(e)
 		}
 	}
 	return nil
@@ -353,10 +274,7 @@ func (m *meross) buildPayload(template string, value json.Number) string {
 func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
-	var rawStatus *rawStatus
-	var payload string
-	var status []any
-	var endpoint *endpoint
+	var endpoint EndpointIF
 	var err error
 
 	defer func() {
@@ -393,112 +311,20 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if request.Value != "" && endpoint.MaxValue != 0 {
-		valueInt64, err := request.Value.Int64()
-		if err != nil || valueInt64 > endpoint.MaxValue || valueInt64 < endpoint.MinValue {
-			errorMessage := fmt.Sprintf("Invalid Parameter: value (Min: %d, Max: %d)", endpoint.MinValue, endpoint.MaxValue)
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, errorMessage, nil)
-			return
-		}
-
-	}
-
-	switch endpoint.Code {
-	case "toggle":
-		if request.Value == "" {
-			endpoint = m.getEndpoint("status")
-			payload = m.buildPayload(endpoint.Template, toJsonNumber(0))
-			rawStatus, err = m.post("GET", endpoint.Namespace, payload)
-			if err != nil {
-				logging.Log(logging.Error, err.Error())
-				httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-				return
-			}
-
-			request.Value = toJsonNumber(1 - rawStatus.Payload.All[0].Togglex.Onoff)
-		}
-
-		endpoint = m.getEndpoint("toggle")
-		payload = m.buildPayload(endpoint.Template, request.Value)
-		_, err = m.post("SET", endpoint.Namespace, payload)
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-	default:
-		method := "SET"
-		if request.Value == "" {
-			method = "GET"
-			// Hacky way to keep templates consistant with two placeholders
-			request.Value = toJsonNumber(0)
-		}
-		payload = m.buildPayload(endpoint.Template, request.Value)
-		rawStatus, err = m.post(method, endpoint.Namespace, payload)
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-
-		if method == "SET" {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-			return
-		}
-
-		switch endpoint.Code {
-		case "status":
-			deviceStates := rawStatus.Payload.All
-			for i := range deviceStates {
-				heating := deviceStates[i].Temperature.CurrentSet-deviceStates[i].Temperature.Room > 0
-				openWindow := deviceStates[i].Temperature.OpenWindow != 0
-				status = append(status, &statusGet{
-					Id:     &deviceStates[i].ID,
-					Onoff:  &deviceStates[i].Togglex.Onoff,
-					Mode:   &deviceStates[i].Mode.State,
-					Online: &deviceStates[i].Online.Status,
-					Temperature: &temperature{
-						Current:    &deviceStates[i].Temperature.Room,
-						Target:     &deviceStates[i].Temperature.CurrentSet,
-						Heating:    &heating,
-						OpenWindow: &openWindow,
-					},
-				})
-			}
-		case "battery":
-			deviceStates := rawStatus.Payload.Battery
-			for i := range deviceStates {
-				status = append(status, &singleGet{
-					Id:    &deviceStates[i].ID,
-					Value: &deviceStates[i].Value,
-				})
-			}
-		case "mode":
-			deviceStates := rawStatus.Payload.Mode
-			for i := range deviceStates {
-				status = append(status, &singleGet{
-					Id:    &deviceStates[i].ID,
-					Value: &deviceStates[i].State,
-				})
-			}
-		case "adjust":
-			deviceStates := rawStatus.Payload.Adjust
-			for i := range deviceStates {
-				status = append(status, &singleGet{
-					Id:    &deviceStates[i].ID,
-					Value: &deviceStates[i].Temperature,
-				})
-			}
-		default:
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusNotImplemented, "Not Implemented", nil)
-			return
-		}
-
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", status)
+	if err := endpoint.ValidateValue(request.Value); err != nil {
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter: value (%s)", err.Error()), nil)
 		return
 	}
 
-	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
+	// delegate all request processing to the endpoint implementation
+	statusCode, payload, message, err := endpoint.HandleMeross(m, request)
+	if err != nil {
+		logging.Log(logging.Error, err.Error())
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		return
+	}
+
+	httpCode, jsonResponse = device.SetJSONResponse(statusCode, message, payload)
 }
 
 // getDeviceNames returns the names of all Meross devices in the base configuration.
@@ -536,10 +362,7 @@ func (b *base) getDeviceById(id string) *meross {
 func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
-	var rawStatus *rawStatus
-	var payload strings.Builder
-	var status []*namedStatus
-	var endpoint *endpoint
+	var endpoint EndpointIF
 	var err error
 
 	defer func() {
@@ -606,148 +429,18 @@ DUPLICATE_DEVICE:
 		return
 	}
 
-	if request.Value != "" && endpoint.MaxValue != 0 {
-		valueInt64, err := request.Value.Int64()
-		if err != nil || valueInt64 > endpoint.MaxValue || valueInt64 < endpoint.MinValue {
-			errorMessage := fmt.Sprintf("Invalid Parameter: value (Min: %d, Max: %d)", endpoint.MinValue, endpoint.MaxValue)
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, errorMessage, nil)
-			return
-		}
-
-	}
-
-	m := devices[0]
-
-	switch endpoint.Code {
-	case "toggle":
-		valueTally := int64(0)
-		if request.Value == "" {
-			request.Value = toJsonNumber(0)
-			endpoint = m.getEndpoint("status")
-			// Build array of devices to send to hub as a single post
-			for i, m := range devices {
-				payload.WriteString(m.buildPayload(endpoint.Template, toJsonNumber(0)))
-				if i < len(devices)-1 {
-					payload.WriteString(",")
-				}
-			}
-			rawStatus, err = b.post(m.Host, "GET", endpoint.Namespace, payload.String(), m.Key, m.Timeout)
-			if err != nil {
-				logging.Log(logging.Error, err.Error())
-				httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-				return
-			}
-
-			for _, s := range rawStatus.Payload.All {
-				valueTally += s.Togglex.Onoff
-			}
-
-			if valueTally <= int64(len(devices))/2 {
-				request.Value = toJsonNumber(1)
-			}
-		}
-
-		endpoint = devices[0].getEndpoint("toggle")
-		for i, m := range devices {
-			payload.WriteString(m.buildPayload(endpoint.Template, request.Value))
-			if i < len(devices)-1 {
-				payload.WriteString(",")
-			}
-		}
-		_, err = b.post(m.Host, "SET", endpoint.Namespace, payload.String(), m.Key, m.Timeout)
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-	default:
-		method := "SET"
-		if request.Value == "" {
-			method = "GET"
-			// Hacky way to keep templates consistant with two placeholders
-			request.Value = toJsonNumber(0)
-		}
-		for i, m := range devices {
-			payload.WriteString(m.buildPayload(endpoint.Template, request.Value))
-			if i < len(devices)-1 {
-				payload.WriteString(",")
-			}
-		}
-		rawStatus, err = b.post(m.Host, method, endpoint.Namespace, payload.String(), m.Key, m.Timeout)
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-
-		if method == "SET" {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-			return
-		}
-
-		switch endpoint.Code {
-		case "status":
-			deviceStates := rawStatus.Payload.All
-			for i := range deviceStates {
-				heating := deviceStates[i].Temperature.CurrentSet-deviceStates[i].Temperature.Room > 0
-				openWindow := deviceStates[i].Temperature.OpenWindow != 0
-				status = append(status, &namedStatus{
-					Name: b.getDeviceById(deviceStates[i].ID).Name,
-					Status: &statusGet{
-						Id:     &deviceStates[i].ID,
-						Onoff:  &deviceStates[i].Togglex.Onoff,
-						Mode:   &deviceStates[i].Mode.State,
-						Online: &deviceStates[i].Online.Status,
-						Temperature: &temperature{
-							Current:    &deviceStates[i].Temperature.Room,
-							Target:     &deviceStates[i].Temperature.CurrentSet,
-							Heating:    &heating,
-							OpenWindow: &openWindow,
-						},
-					},
-				})
-			}
-		case "battery":
-			deviceStates := rawStatus.Payload.Battery
-			for i := range deviceStates {
-				status = append(status, &namedStatus{
-					Name: b.getDeviceById(deviceStates[i].ID).Name,
-					Status: &singleGet{
-						Id:    &deviceStates[i].ID,
-						Value: &deviceStates[i].Value,
-					},
-				})
-			}
-		case "mode":
-			deviceStates := rawStatus.Payload.Mode
-			for i := range deviceStates {
-				status = append(status, &namedStatus{
-					Name: b.getDeviceById(deviceStates[i].ID).Name,
-					Status: singleGet{
-						Id:    &deviceStates[i].ID,
-						Value: &deviceStates[i].State,
-					},
-				})
-			}
-		case "adjust":
-			deviceStates := rawStatus.Payload.Adjust
-			for i := range deviceStates {
-				status = append(status, &namedStatus{
-					Name: b.getDeviceById(deviceStates[i].ID).Name,
-					Status: singleGet{
-						Id:    &deviceStates[i].ID,
-						Value: &deviceStates[i].Temperature,
-					},
-				})
-			}
-		default:
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusNotImplemented, "Not Implemented", nil)
-			return
-		}
-
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", status)
+	if err := endpoint.ValidateValue(request.Value); err != nil {
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter: value (%s)", err.Error()), nil)
 		return
 	}
 
-	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
+	// delegate full handling to the endpoint implementation (no switches)
+	statusCode, payloadData, message, err := endpoint.HandleBase(b, devices, request)
+	if err != nil {
+		logging.Log(logging.Error, err.Error())
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		return
+	}
+
+	httpCode, jsonResponse = device.SetJSONResponse(statusCode, message, payloadData)
 }
