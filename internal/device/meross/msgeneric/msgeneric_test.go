@@ -2,6 +2,7 @@ package msgeneric
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,79 +19,36 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	normalMerossConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:
-    name: test1
-    deviceType: bulb
-    timeoutMs: 500
-    host: "127.0.0.1"
-- type: meross
-  config:
-    name: test2
-    deviceType: socket
-    timeoutMs: 500
-    host: "127.0.0.2"
-- type: meross
-  config:
-    name: test3
-    deviceType: bulb
-    timeoutMs: 500
-    host: "127.0.0.3"
-- type: tvcom
-  config:`
-	unknownDeviceTypeMerossConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:
-    name: office
-    deviceType: bulb
-    timeoutMs: 500
-    host: "test.com"
-- type: meross
-  config:
-    name: thermostat
-    deviceType: test
-    timeoutMs: 500
-    host: "test.com"`
-	missingMerossConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:
-- type: meross
-  config:`
-	missingMerossConfigParameter = `apiVersion: v2
-devices:
-- type: meross
-  config:
-    name: office
-    deviceType: bulb
-    timeoutMs: 500
-- type: meross
-  config:
-    deviceType: socket
-    timeoutMs: 500
-    host: "test.com"`
-	singleDeviceMerossConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:
-    name: test1
-    deviceType: bulb
-    timeoutMs: 500
-    host: "127.0.0.1"`
-	emptyConfig     = ``
-	nonYamlConfig   = `not_yaml`
-	baseNoEndpoints = `baseTemplate: '{"header":{"messageId":"","method":"%s","namespace":"%s","payloadVersion":1,"sign":"cfcd208495d565ef66e7dff9f98764da","timestamp":0},"payload":%s}'
-endpoints:`
-	normalServerConfig = `get:
-  code: 200
-  json: '{"header":{"messageId":"","namespace":"Appliance.System.All","method":"GETACK","payloadVersion":1,"from":"/appliance/2102259955984090842748e1e94e0605/publish","timestamp":1696614615,"timestampMs":134,"sign":"457fdad9d35da59ccd1008e6c18fbb4b"},"payload":{"all":{"system":{"hardware":{"type":"msl120d","subType":"eu","version":"2.0.0","chipType":"mt7682","uuid":"2102259955984090842748e1e94e0605","macAddress":"48:e1:e9:4e:06:05"},"firmware":{"version":"2.1.2","compileTime":"2020/04/30 14:45:31 GMT +08:00","wifiMac":"9c:53:22:90:d3:c8","innerIp":"192.168.1.140","server":"pc.int","port":8883,"userId":0},"time":{"timestamp":1696614615,"timezone":"","timeRule":[]},"online":{"status":2}},"digest":{"togglex":[{"channel":0,"onoff":1,"lmTime":1696611561}],"triggerx":[],"timerx":[],"light":{"capacity":6,"channel":0,"rgb":255,"temperature":1,"luminance":-1,"transform":-1}}}}}'
-set:
-  code: 200`
-)
+//nolint:lll // Test fixtures are long but preserved for readability.
+//go:embed testdata/merossConfig/normal_config.yaml
+var normalMerossConfig string
+
+//go:embed testdata/merossConfig/unknown_deviceType.yaml
+var unknownDeviceTypeMerossConfig string
+
+//go:embed testdata/merossConfig/missing_config.yaml
+var missingMerossConfig string
+
+//go:embed testdata/merossConfig/missing_config_parameter.yaml
+var missingMerossConfigParameter string
+
+//go:embed testdata/merossConfig/single_device_config.yaml
+var singleDeviceMerossConfig string
+
+//go:embed testdata/merossConfig/empty_yaml_config.yaml
+var emptyConfig string
+
+//go:embed testdata/baseConfig/non_yaml_config.yaml
+var nonYamlConfig string
+
+//go:embed testdata/baseConfig/0_endpoints.yaml
+var baseNoEndpoints string
+
+//go:embed testdata/serverConfig/normal_responses.yaml
+var normalServerConfig string
+
+//go:embed testdata/baseConfig/empty_yaml_config.yaml
+var baseEmptyConfig string
 
 func bytesPtr(b []byte) *[]byte {
 	return &b
@@ -177,7 +135,7 @@ func TestRoutes(t *testing.T) {
 		{
 			name:           "base_empty_yaml_config",
 			merossConfig:   normalMerossConfig,
-			internalConfig: bytesPtr([]byte(emptyConfig)),
+			internalConfig: bytesPtr([]byte(baseEmptyConfig)),
 			routeCount:     0,
 			expectedError:  errors.New(""),
 		},
@@ -454,5 +412,82 @@ func TestHandler(t *testing.T) {
 				t.Errorf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestHelperFunctions(t *testing.T) {
+	t.Run("toJsonNumber", func(t *testing.T) {
+		n := toJsonNumber(42)
+		if n.String() != "42" {
+			t.Fatalf("expected json number string of 42, got %s", n.String())
+		}
+	})
+
+	t.Run("randomHexLength", func(t *testing.T) {
+		v := randomHex(8)
+		if len(v) != 16 {
+			t.Fatalf("expected 16 hex characters, got %d", len(v))
+		}
+	})
+
+	t.Run("md5SumString", func(t *testing.T) {
+		expected := "098f6bcd4621d373cade4e832627b4f6"
+		if got := md5SumString("test"); got != expected {
+			t.Fatalf("md5 hash mismatch: expected %s, got %s", expected, got)
+		}
+	})
+
+	t.Run("decodeRequestJSONAndQuery", func(t *testing.T) {
+		type sample struct {
+			Code  string      `json:"code" schema:"code"`
+			Value json.Number `json:"value" schema:"value"`
+		}
+
+		jsonReq := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"code":"toggle","value":5}`))
+		jsonReq.Header.Set("Content-Type", "application/json")
+		body := sample{}
+		if err := decodeRequest(jsonReq, &body); err != nil {
+			t.Fatalf("expected json decode to succeed: %v", err)
+		}
+		if body.Code != "toggle" || body.Value.String() != "5" {
+			t.Fatalf("unexpected json decode result: %+v", body)
+		}
+
+		queryReq := httptest.NewRequest(http.MethodGet, "/?code=toggle&value=7", nil)
+		queryBody := sample{}
+		if err := decodeRequest(queryReq, &queryBody); err != nil {
+			t.Fatalf("expected query decode to succeed: %v", err)
+		}
+		if queryBody.Code != "toggle" || queryBody.Value.String() != "7" {
+			t.Fatalf("unexpected query decode result: %+v", queryBody)
+		}
+	})
+}
+
+func TestBaseHelpers(t *testing.T) {
+	endpoints := []*endpoint{
+		{Code: "status", SupportedDevices: []string{"bulb"}},
+		{Code: "toggle", SupportedDevices: []string{"socket"}},
+	}
+	b := base{Endpoints: endpoints}
+	m1 := &meross{Name: "one", DeviceType: "bulb", Base: b}
+	m2 := &meross{Name: "two", DeviceType: "socket", Base: b}
+	b.Devices = []*meross{m1, m2}
+
+	names := b.getDeviceNames()
+	assert.ElementsMatch(t, []string{"one", "two"}, names)
+
+	if got := b.getDevice("one"); got != m1 {
+		t.Fatalf("expected to retrieve device 'one'")
+	}
+	if got := b.getDevice("missing"); got != nil {
+		t.Fatalf("expected missing device lookup to return nil")
+	}
+
+	if ep := m1.getEndpoint("status"); ep == nil {
+		t.Fatalf("expected bulb to resolve status endpoint")
+	}
+	if ep := m1.getEndpoint("toggle"); ep != nil {
+		t.Fatalf("expected unsupported endpoint to be nil")
 	}
 }
