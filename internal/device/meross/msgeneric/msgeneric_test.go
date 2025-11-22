@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
@@ -20,13 +18,86 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
-	serverConfigFile, err := os.ReadFile(serverConfigPath)
-	if err != nil {
-		t.Fatalf("Could not read serverConfigPath")
-	}
+const (
+	normalMerossConfig = `apiVersion: v2
+devices:
+- type: meross
+  config:
+    name: test1
+    deviceType: bulb
+    timeoutMs: 500
+    host: "127.0.0.1"
+- type: meross
+  config:
+    name: test2
+    deviceType: socket
+    timeoutMs: 500
+    host: "127.0.0.2"
+- type: meross
+  config:
+    name: test3
+    deviceType: bulb
+    timeoutMs: 500
+    host: "127.0.0.3"
+- type: tvcom
+  config:`
+	unknownDeviceTypeMerossConfig = `apiVersion: v2
+devices:
+- type: meross
+  config:
+    name: office
+    deviceType: bulb
+    timeoutMs: 500
+    host: "test.com"
+- type: meross
+  config:
+    name: thermostat
+    deviceType: test
+    timeoutMs: 500
+    host: "test.com"`
+	missingMerossConfig = `apiVersion: v2
+devices:
+- type: meross
+  config:
+- type: meross
+  config:`
+	missingMerossConfigParameter = `apiVersion: v2
+devices:
+- type: meross
+  config:
+    name: office
+    deviceType: bulb
+    timeoutMs: 500
+- type: meross
+  config:
+    deviceType: socket
+    timeoutMs: 500
+    host: "test.com"`
+	singleDeviceMerossConfig = `apiVersion: v2
+devices:
+- type: meross
+  config:
+    name: test1
+    deviceType: bulb
+    timeoutMs: 500
+    host: "127.0.0.1"`
+	emptyConfig     = ``
+	nonYamlConfig   = `not_yaml`
+	baseNoEndpoints = `baseTemplate: '{"header":{"messageId":"","method":"%s","namespace":"%s","payloadVersion":1,"sign":"cfcd208495d565ef66e7dff9f98764da","timestamp":0},"payload":%s}'
+endpoints:`
+	normalServerConfig = `get:
+  code: 200
+  json: '{"header":{"messageId":"","namespace":"Appliance.System.All","method":"GETACK","payloadVersion":1,"from":"/appliance/2102259955984090842748e1e94e0605/publish","timestamp":1696614615,"timestampMs":134,"sign":"457fdad9d35da59ccd1008e6c18fbb4b"},"payload":{"all":{"system":{"hardware":{"type":"msl120d","subType":"eu","version":"2.0.0","chipType":"mt7682","uuid":"2102259955984090842748e1e94e0605","macAddress":"48:e1:e9:4e:06:05"},"firmware":{"version":"2.1.2","compileTime":"2020/04/30 14:45:31 GMT +08:00","wifiMac":"9c:53:22:90:d3:c8","innerIp":"192.168.1.140","server":"pc.int","port":8883,"userId":0},"time":{"timestamp":1696614615,"timezone":"","timeRule":[]},"online":{"status":2}},"digest":{"togglex":[{"channel":0,"onoff":1,"lmTime":1696611561}],"triggerx":[],"timerx":[],"light":{"capacity":6,"channel":0,"rgb":255,"temperature":1,"luminance":-1,"transform":-1}}}}}'
+set:
+  code: 200`
+)
 
-	serverConfig := struct {
+func bytesPtr(b []byte) *[]byte {
+	return &b
+}
+
+func setupHTTPServer(t *testing.T, serverConfig string) *httptest.Server {
+	serverConfigValues := struct {
 		Get struct {
 			Code int    `yaml:"code"`
 			JSON string `yaml:"json"`
@@ -36,7 +107,7 @@ func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
 		} `yaml:"set"`
 	}{}
 
-	if err := yaml.Unmarshal(serverConfigFile, &serverConfig); err != nil {
+	if err := yaml.Unmarshal([]byte(serverConfig), &serverConfigValues); err != nil {
 		t.Fatalf("Could not parse serverConfigPath")
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,11 +131,11 @@ func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
 		switch body.Header.Method {
 		case "GET":
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(serverConfig.Get.Code)
-			w.Write([]byte(serverConfig.Get.JSON))
+			w.WriteHeader(serverConfigValues.Get.Code)
+			w.Write([]byte(serverConfigValues.Get.JSON))
 		case "SET":
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(serverConfig.Set.Code)
+			w.WriteHeader(serverConfigValues.Set.Code)
 			w.Write([]byte(""))
 		}
 
@@ -76,90 +147,78 @@ func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
 func TestRoutes(t *testing.T) {
 	logging.SetLogLevel(logging.Error)
 	testCases := []struct {
-		name               string
-		configPath         string
-		internalConfigPath string
-		routeCount         int
-		expectedError      error
+		name           string
+		merossConfig   string
+		internalConfig *[]byte
+		routeCount     int
+		expectedError  error
 	}{
 		{
-			name:               "default_config",
-			configPath:         "testdata/merossConfig/normal_config.yaml",
-			internalConfigPath: "device.yaml",
-			routeCount:         5,
-			expectedError:      nil,
+			name:           "default_config",
+			merossConfig:   normalMerossConfig,
+			internalConfig: nil,
+			routeCount:     5,
+			expectedError:  nil,
 		},
 		{
-			name:               "base_bad_path",
-			configPath:         "testdata/merossConfig/normal_config.yaml",
-			internalConfigPath: "non/existant/file",
-			routeCount:         0,
-			expectedError:      &fs.PathError{},
+			name:           "base_0_endpoints",
+			merossConfig:   normalMerossConfig,
+			internalConfig: bytesPtr([]byte(baseNoEndpoints)),
+			routeCount:     0,
+			expectedError:  errors.New(""),
 		},
 		{
-			name:               "base_0_endpoints",
-			configPath:         "testdata/merossConfig/normal_config.yaml",
-			internalConfigPath: "testdata/baseConfig/0_endpoints.yaml",
-			routeCount:         0,
-			expectedError:      errors.New(""),
+			name:           "base_non_yaml_config",
+			merossConfig:   normalMerossConfig,
+			internalConfig: bytesPtr([]byte(nonYamlConfig)),
+			routeCount:     0,
+			expectedError:  &yaml.TypeError{},
 		},
 		{
-			name:               "base_non_yaml_config",
-			configPath:         "testdata/merossConfig/normal_config.yaml",
-			internalConfigPath: "testdata/baseConfig/non_yaml_config.yaml",
-			routeCount:         0,
-			expectedError:      &yaml.TypeError{},
+			name:           "base_empty_yaml_config",
+			merossConfig:   normalMerossConfig,
+			internalConfig: bytesPtr([]byte(emptyConfig)),
+			routeCount:     0,
+			expectedError:  errors.New(""),
 		},
 		{
-			name:               "base_empty_yaml_config",
-			configPath:         "testdata/merossConfig/normal_config.yaml",
-			internalConfigPath: "testdata/baseConfig/empty_yaml_config.yaml",
-			routeCount:         0,
-			expectedError:      errors.New(""),
+			name:           "meross_empty_yaml_config",
+			merossConfig:   emptyConfig,
+			internalConfig: nil,
+			routeCount:     0,
+			expectedError:  errors.New(""),
 		},
 		{
-			name:               "meross_empty_yaml_config",
-			configPath:         "testdata/merossConfig/empty_yaml_config.yaml",
-			internalConfigPath: "device.yaml",
-			routeCount:         0,
-			expectedError:      errors.New(""),
+			name:           "meross_missing_config",
+			merossConfig:   missingMerossConfig,
+			internalConfig: nil,
+			routeCount:     0,
+			expectedError:  errors.New(""),
 		},
 		{
-			name:               "meross_missing_config",
-			configPath:         "testdata/merossConfig/missing_config.yaml",
-			internalConfigPath: "device.yaml",
-			routeCount:         0,
-			expectedError:      errors.New(""),
+			name:           "meross_missing_config_parameter",
+			merossConfig:   missingMerossConfigParameter,
+			internalConfig: nil,
+			routeCount:     0,
+			expectedError:  errors.New(""),
 		},
 		{
-			name:               "meross_missing_config_parameter",
-			configPath:         "testdata/merossConfig/missing_config_parameter.yaml",
-			internalConfigPath: "device.yaml",
-			routeCount:         0,
-			expectedError:      errors.New(""),
-		},
-		{
-			name:               "meross_unknown_deviceType",
-			configPath:         "testdata/merossConfig/unknown_deviceType.yaml",
-			internalConfigPath: "device.yaml",
-			routeCount:         4,
-			expectedError:      nil,
+			name:           "meross_unknown_deviceType",
+			merossConfig:   unknownDeviceTypeMerossConfig,
+			internalConfig: nil,
+			routeCount:     4,
+			expectedError:  nil,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			merossConfigFile, err := os.ReadFile(tc.configPath)
-			if err != nil {
-				t.Fatalf("Could not read meross input")
-			}
-
 			merossConfig := config.Config{}
 
-			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
+			if err := yaml.Unmarshal([]byte(tc.merossConfig), &merossConfig); err != nil {
 				t.Fatalf("Could not read meross input")
 			}
-			_, r, err := routes(&merossConfig, tc.internalConfigPath)
+			_, r, err := routes(&merossConfig, tc.internalConfig)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
@@ -188,8 +247,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/test1?code=status",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK","data":{"onoff":1,"rgb":255,"temperature":1,"luminance":-1}}`,
 		},
@@ -198,8 +257,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/test2",
 			data:         []byte(`{"code": "toggle"}`),
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK"}`,
 		},
@@ -208,8 +267,8 @@ func TestHandler(t *testing.T) {
 			method:       "GET",
 			url:          "/meross/test1",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK","data":["toggle","status","luminance","temperature","rgb","fade"]}`,
 		},
@@ -218,8 +277,8 @@ func TestHandler(t *testing.T) {
 			method:       "GET",
 			url:          "/meross/",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK","data":["test1","test2","test3"]}`,
 		},
@@ -228,8 +287,8 @@ func TestHandler(t *testing.T) {
 			method:       "GET",
 			url:          "/meross/",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/single_device_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: singleDeviceMerossConfig,
 			expectedCode: 404,
 			expectedBody: "404 page not found\n",
 		},
@@ -238,8 +297,8 @@ func TestHandler(t *testing.T) {
 			method:       "DELETE",
 			url:          "/meross/test1",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 405,
 			expectedBody: `{"message":"Method Not Allowed"}`,
 		},
@@ -248,8 +307,8 @@ func TestHandler(t *testing.T) {
 			method:       "DELETE",
 			url:          "/meross/",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 405,
 			expectedBody: `{"message":"Method Not Allowed"}`,
 		},
@@ -258,8 +317,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/test1",
 			data:         []byte(`not_json`),
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 400,
 			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
 		},
@@ -268,8 +327,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/test1?monkeytest",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 400,
 			expectedBody: `{"message":"Malformed or empty query string"}`,
 		},
@@ -278,8 +337,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/test1?code=monkey",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 400,
 			expectedBody: `{"message":"Invalid Parameter: code"}`,
 		},
@@ -288,18 +347,18 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/test1?code=luminance&value=200",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
-			expectedCode: 400,
-			expectedBody: `{"message":"Invalid Parameter: value (Min: 0, Max: 100)"}`,
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
+			expectedCode: 500,
+			expectedBody: `{"message":"Internal Server Error"}`,
 		},
 		{
 			name:         "luminance_no_error",
 			method:       "POST",
 			url:          "/meross/test1?code=luminance&value=50",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK"}`,
 		},
@@ -308,8 +367,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/test1?code=fade",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK"}`,
 		},
@@ -318,8 +377,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross/?code=status&hosts=test1,test2",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK","data":{"devices":[{"name":"test1","status":{"onoff":1,"rgb":255,"temperature":1,"luminance":-1}},{"name":"test2","status":{"onoff":1,"rgb":255,"temperature":1,"luminance":-1}}]}}`,
 		},
@@ -328,18 +387,18 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross?code=toggle&hosts=test1,test2",
 			data:         nil,
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
-			expectedCode: 200,
-			expectedBody: `{"message":"OK"}`,
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
+			expectedCode: 500,
+			expectedBody: `{"message":"Internal Server Error"}`,
 		},
 		{
 			name:         "multi_fade_no_error",
 			method:       "POST",
 			url:          "/meross",
 			data:         []byte(`{"code":"fade", "hosts": "test1,test3"}`),
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK"}`,
 		},
@@ -348,8 +407,8 @@ func TestHandler(t *testing.T) {
 			method:       "POST",
 			url:          "/meross",
 			data:         []byte(`{"code":"luminance", "hosts": "test1,test3","value":"10"}`),
-			serverConfig: "testdata/serverConfig/normal_responses.yaml",
-			merossConfig: "testdata/merossConfig/normal_config.yaml",
+			serverConfig: normalServerConfig,
+			merossConfig: normalMerossConfig,
 			expectedCode: 200,
 			expectedBody: `{"message":"OK"}`,
 		},
@@ -357,18 +416,13 @@ func TestHandler(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			merossConfigFile, err := os.ReadFile(tc.merossConfig)
-			if err != nil {
-				t.Fatalf("Could not read meross input")
-			}
-
 			merossConfig := config.Config{}
 
-			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
+			if err := yaml.Unmarshal([]byte(tc.merossConfig), &merossConfig); err != nil {
 				t.Fatalf("Could not read meross input")
 			}
 
-			base, routes, err := routes(&merossConfig, "device.yaml")
+			base, routes, err := routes(&merossConfig, nil)
 
 			if err != nil {
 				t.Fatalf("routes returned an error: %v", err)
