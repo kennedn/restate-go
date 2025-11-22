@@ -2,6 +2,7 @@ package msh300hk
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,30 +19,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	normalRadiatorConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:
-    name: rad1
-    deviceType: radiator
-    timeoutMs: 500
-    host: "127.0.0.1"
-    ids: ["dev1","dev2"]
-- type: meross
-  config:
-    name: rad2
-    deviceType: radiator
-    timeoutMs: 500
-    host: "127.0.0.2"
-    ids: ["dev3"]`
-	missingRadiatorConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:`
-	emptyInternalConfig   = ``
-	nonYamlInternalConfig = `not_yaml`
-)
+//go:embed testdata/merossConfig/normal_config.yaml
+var normalRadiatorConfig string
+
+//go:embed testdata/merossConfig/missing_config.yaml
+var missingRadiatorConfig string
+
+//go:embed testdata/baseConfig/empty.yaml
+var emptyInternalConfig string
+
+//go:embed testdata/baseConfig/non_yaml_config.yaml
+var nonYamlInternalConfig string
+
+//go:embed testdata/serverResponse/single_status.json
+var singleStatusResponse string
+
+//go:embed testdata/serverResponse/multi_status.json
+var multiStatusResponse string
 
 func bytesPtr(b []byte) *[]byte {
 	return &b
@@ -49,8 +43,6 @@ func bytesPtr(b []byte) *[]byte {
 
 func setupRadiatorServer(t *testing.T) *httptest.Server {
 	t.Helper()
-
-	response := `{"payload":{"all":[{"id":"dev1","scheduleBMode":0,"online":{"status":1,"lastActiveTime":0},"togglex":{"onoff":1},"timeSync":{"state":0},"mode":{"state":2},"temperature":{"room":200,"currentSet":220,"heating":1,"openWindow":0}}],"battery":[{"id":"dev1","value":95}]}}`
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -74,7 +66,11 @@ func setupRadiatorServer(t *testing.T) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 
 		if payload.Header.Method == "GET" {
-			w.Write([]byte(response))
+			if r.URL.Query().Get("hosts") != "" || bytes.Contains(body, []byte("dev3")) {
+				w.Write([]byte(multiStatusResponse))
+				return
+			}
+			w.Write([]byte(singleStatusResponse))
 			return
 		}
 
@@ -196,12 +192,36 @@ func TestHandlers(t *testing.T) {
 			expectedBody: `{"message":"Method Not Allowed"}`,
 		},
 		{
+			name:         "toggle_single_success",
+			method:       http.MethodPost,
+			url:          "/radiator/rad1?code=toggle&value=1",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK"}`,
+		},
+		{
+			name:         "multi_adjust_success",
+			method:       http.MethodPost,
+			url:          "/radiator/?code=adjust&hosts=rad1,rad2",
+			data:         []byte(`{"code":"adjust","hosts":"rad1,rad2","value":210}`),
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK"}`,
+		},
+		{
 			name:         "multi_invalid_hosts",
 			method:       http.MethodPost,
 			url:          "/radiator/?code=status",
 			data:         nil,
 			expectedCode: http.StatusBadRequest,
 			expectedBody: `{"message":"Invalid Parameter: hosts"}`,
+		},
+		{
+			name:         "multi_status_success",
+			method:       http.MethodPost,
+			url:          "/radiator/?code=status&hosts=rad1,rad2",
+			data:         []byte(`{"code":"status","hosts":"rad1,rad2"}`),
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK","data":[{"name":"rad1","status":{"id":"dev1","onoff":1,"mode":2,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}},{"name":"rad2","status":{"id":"dev3","onoff":0,"mode":1,"online":1,"temperature":{"current":190,"target":190,"heating":false,"openWindow":true}}}]}`,
 		},
 		{
 			name:         "status_success",

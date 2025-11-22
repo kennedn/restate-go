@@ -1,0 +1,14 @@
+apiVersion: v2
+devices:
+- type: meross
+  config:
+    name: thermo1
+    deviceType: thermostat
+    timeoutMs: 500
+    host: "127.0.0.1"
+- type: meross
+  config:
+    name: thermo2
+    deviceType: thermostat
+    timeoutMs: 500
+    host: "127.0.0.2"

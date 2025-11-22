@@ -2,6 +2,7 @@ package mts200b
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -18,28 +19,23 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const (
-	normalThermostatConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:
-    name: thermo1
-    deviceType: thermostat
-    timeoutMs: 500
-    host: "127.0.0.1"
-- type: meross
-  config:
-    name: thermo2
-    deviceType: thermostat
-    timeoutMs: 500
-    host: "127.0.0.2"`
-	missingThermostatConfig = `apiVersion: v2
-devices:
-- type: meross
-  config:`
-	emptyThermostatInternal   = ``
-	nonYamlThermostatInternal = `not_yaml`
-)
+//go:embed testdata/merossConfig/normal_config.yaml
+var normalThermostatConfig string
+
+//go:embed testdata/merossConfig/missing_config.yaml
+var missingThermostatConfig string
+
+//go:embed testdata/baseConfig/empty.yaml
+var emptyThermostatInternal string
+
+//go:embed testdata/baseConfig/non_yaml_config.yaml
+var nonYamlThermostatInternal string
+
+//go:embed testdata/serverResponse/single_status.json
+var singleThermostatResponse string
+
+//go:embed testdata/serverResponse/multi_status.json
+var multiThermostatResponse string
 
 func bytesPtr(b []byte) *[]byte {
 	return &b
@@ -47,8 +43,6 @@ func bytesPtr(b []byte) *[]byte {
 
 func setupThermostatServer(t *testing.T) *httptest.Server {
 	t.Helper()
-
-	response := `{"payload":{"all":{"digest":{"thermostat":{"mode":[{"onoff":1,"mode":2,"currentTemp":200,"targetTemp":220}],"windowOpened":[{"status":0}]}}}}}`
 
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -72,7 +66,11 @@ func setupThermostatServer(t *testing.T) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 
 		if payload.Header.Method == "GET" {
-			w.Write([]byte(response))
+			if bytes.Count(body, []byte("payload")) > 1 {
+				w.Write([]byte(multiThermostatResponse))
+				return
+			}
+			w.Write([]byte(singleThermostatResponse))
 			return
 		}
 
@@ -192,6 +190,14 @@ func TestHandlers(t *testing.T) {
 			data:         nil,
 			expectedCode: http.StatusMethodNotAllowed,
 			expectedBody: `{"message":"Method Not Allowed"}`,
+		},
+		{
+			name:         "toggle_single_success",
+			method:       http.MethodPost,
+			url:          "/meross/thermo1?code=toggle&value=1",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK"}`,
 		},
 		{
 			name:         "multi_invalid_hosts",
