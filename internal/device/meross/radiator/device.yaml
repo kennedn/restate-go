@@ -1,0 +1,33 @@
+baseTemplate: '{"header":{"from": "http://10.10.10.1/config", "messageId":"%s","method":"%s","namespace":"%s","payloadVersion":1,"sign":"%s","timestamp":0},"payload":%s}'
+endpoints:
+- code: toggle
+  supportedDevices: 
+  - radiator
+  minValue: 0
+  maxValue: 1
+  namespace: Appliance.Hub.ToggleX
+  template: '{"channel":0,"id":"%s","onoff":%s}'
+- code: mode
+  supportedDevices: 
+  - radiator
+  minValue: 0
+  maxValue: 4
+  namespace: Appliance.Hub.Mts100.Mode
+  template: '{"id":"%s","state":%s}'
+- code: adjust
+  supportedDevices: 
+  - radiator
+  minValue: -32767
+  maxValue: 32767
+  namespace: Appliance.Hub.Mts100.Adjust
+  template: '{"id":"%s","temperature":%s}'
+- code: status
+  supportedDevices: 
+  - radiator
+  namespace: Appliance.Hub.Mts100.All
+  template: '{"id":"%s","dummy":%s}'
+- code: battery
+  supportedDevices: 
+  - radiator
+  namespace: Appliance.Hub.Battery
+  template: '{"id":"%s","dummy":%s}'

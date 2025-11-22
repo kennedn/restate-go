@@ -1,0 +1,5 @@
+get:
+  code: 200
+  json: '{"header":{"messageId":"","namespace":"Appliance.System.All","method":"GETACK","payloadVersion":1,"from":"/appliance/2102259955984090842748e1e94e0605/publish","timestamp":1696614615,"timestampMs":134,"sign":"457fdad9d35da59ccd1008e6c18fbb4b"},"payload":{"all":{"system":{"hardware":{"type":"msl120d","subType":"eu","version":"2.0.0","chipType":"mt7682","uuid":"2102259955984090842748e1e94e0605","macAddress":"48:e1:e9:4e:06:05"},"firmware":{"version":"2.1.2","compileTime":"2020/04/30 14:45:31 GMT +08:00","wifiMac":"9c:53:22:90:d3:c8","innerIp":"192.168.1.140","server":"pc.int","port":8883,"userId":0},"time":{"timestamp":1696614615,"timezone":"","timeRule":[]},"online":{"status":2}},"digest":{"togglex":[{"channel":0,"onoff":1,"lmTime":1696611561}],"triggerx":[],"timerx":[],"light":{"capacity":6,"channel":0,"rgb":255,"temperature":1,"luminance":-1,"transform":-1}}}}}'
+set:
+  code: 200

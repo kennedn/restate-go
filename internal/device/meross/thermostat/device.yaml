@@ -1,0 +1,21 @@
+baseTemplate: '{"header":{"from": "http://10.10.10.1/config", "messageId":"%s","method":"%s","namespace":"%s","payloadVersion":1,"sign":"%s","timestamp":0},"payload":%s}'
+endpoints:
+- code: toggle
+  supportedDevices: 
+  - thermostat
+  minValue: 0
+  maxValue: 1
+  namespace: Appliance.Control.Thermostat.Mode
+  template: '{"mode":[{"channel":0,"onoff":%s}]}'
+- code: mode
+  supportedDevices: 
+  - thermostat
+  minValue: 0
+  maxValue: 4
+  namespace: Appliance.Control.Thermostat.Mode
+  template: '{"mode":[{"channel":0,"mode":%s}]}'
+- code: status
+  supportedDevices: 
+  - thermostat
+  namespace: Appliance.System.All
+  template: '{}'

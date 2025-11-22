@@ -1,5 +1,5 @@
-// Package meross provides an abstraction for making HTTP calls to control Meross branded smart bulbs and sockets.
-package meross
+// Package bulb provides an abstraction for making HTTP calls to control Meross branded smart bulbs and sockets.
+package bulb
 
 import (
 	"bytes"
@@ -98,6 +98,11 @@ func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 	return routes, err
 }
 
+// Routes returns the router routes for bulb devices.
+func Routes(config *config.Config) ([]router.Route, error) {
+	return (&Device{}).Routes(config)
+}
+
 // toJsonNumber converts a numeric value to a JSON number.
 func toJsonNumber(value any) json.Number {
 	return json.Number(fmt.Sprintf("%d", value))
@@ -109,7 +114,7 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 	base := base{}
 
 	if internalConfigPath == "" {
-		internalConfigPath = "./internal/device/meross/device.yaml"
+		internalConfigPath = "./internal/device/meross/bulb/device.yaml"
 	}
 
 	internalConfigFile, err := os.ReadFile(internalConfigPath)
@@ -159,7 +164,7 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 	}
 
 	if len(routes) == 0 {
-		return nil, []router.Route{}, errors.New("no routes found in config")
+		return nil, []router.Route{}, nil
 	} else if len(routes) == 1 {
 		return &base, routes, nil
 	}
