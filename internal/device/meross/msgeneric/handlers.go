@@ -3,6 +3,7 @@ package msgeneric
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 
@@ -30,7 +31,7 @@ func (b *base) wireHandlers() {
 		case "rgb":
 			ep.Handler = NumericHandler{Code: "rgb", Min: 0, Max: 16777215}
 		default:
-			ep.Handler = DefaultHandler{}
+			log.Fatalf("unknown endpoint code %q", ep.Code)
 		}
 	}
 }
@@ -38,63 +39,6 @@ func (b *base) wireHandlers() {
 // ---------------------------
 // Endpoint Handlers
 // ---------------------------
-
-// DefaultRequest is the generic per-endpoint request shape (now endpoint-specific).
-type DefaultRequest struct {
-	Code  string      `json:"code" schema:"code"`
-	Value json.Number `json:"value,omitempty" schema:"value"`
-}
-
-// DefaultHandler implements the existing "default:" behavior (requires value, no range check).
-type DefaultHandler struct{}
-
-func (h DefaultHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
-	req := DefaultRequest{}
-	if err := decodeRequest(r, &req); err != nil {
-		return nil, err
-	}
-
-	ep := m.getEndpoint(req.Code)
-	if ep == nil {
-		return nil, fmt.Errorf("invalid code")
-	}
-
-	if req.Value == "" {
-		return nil, fmt.Errorf("invalid value")
-	}
-
-	_, err := m.post("SET", *ep, req.Value)
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, nil
-}
-
-func (h DefaultHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (any, error) {
-	req := DefaultRequest{}
-	if err := decodeRequest(r, &req); err != nil {
-		return nil, err
-	}
-
-	if req.Value == "" {
-		return nil, fmt.Errorf("invalid value")
-	}
-
-	responses := b.multiPost(devices, "SET", req.Code, req.Value)
-
-	ok := 0
-	for ns := range responses {
-		if ns.Status != nil {
-			ok++
-		}
-	}
-	if ok == 0 {
-		return nil, fmt.Errorf("all devices errored")
-	}
-
-	return nil, nil
-}
 
 // StatusHandler implements "status" behavior for single and multi device.
 type StatusHandler struct{}
