@@ -1,19 +1,18 @@
 // Package meross provides an abstraction for making HTTP calls to control Meross branded smart bulbs and sockets.
-package meross
+package msgeneric
 
 import (
 	"bytes"
 	"crypto/md5"
 	"crypto/rand"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +25,13 @@ import (
 	"github.com/gorilla/schema"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed device.yaml
+var defaultInternalConfig []byte
+
+// ---------------------------
+// Models / DTOs
+// ---------------------------
 
 // status is a flattened representation of the state of a Meross device, including on/off state, color, temperature, and luminance.
 type status struct {
@@ -63,14 +69,22 @@ type rawStatus struct {
 	} `json:"payload"`
 }
 
+// Handler defines per-endpoint behavior for single-device and multi-device requests.
+// Handlers receive the raw *http.Request so they can decode bespoke request shapes and validate independently.
+type Handler interface {
+	HandleSingle(m *meross, r *http.Request) (any, error)
+	HandleMulti(b *base, devices []*meross, r *http.Request) (any, error)
+}
+
 // endpoint describes a Meross device control endpoint with code, supported devices, and other properties.
+// MinValue/MaxValue are no longer part of the manifest; validation is done inside handlers.
 type endpoint struct {
 	Code             string   `yaml:"code"`
 	SupportedDevices []string `yaml:"supportedDevices"`
-	MinValue         int64    `yaml:"minValue,omitempty"`
-	MaxValue         int64    `yaml:"maxValue,omitempty"`
 	Namespace        string   `yaml:"namespace"`
 	Template         string   `yaml:"template"`
+
+	Handler Handler `yaml:"-"`
 }
 
 // meross represents a Meross device configuration with name, host, device type, timeout, and base configuration.
@@ -94,35 +108,45 @@ type Device struct{}
 
 // Routes generates routes for Meross device control based on a provided configuration.
 func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
-	_, routes, err := routes(config, "")
+	_, routes, err := routes(config, nil)
 	return routes, err
 }
+
+// ---------------------------
+// Helpers
+// ---------------------------
 
 // toJsonNumber converts a numeric value to a JSON number.
 func toJsonNumber(value any) json.Number {
 	return json.Number(fmt.Sprintf("%d", value))
 }
 
+// decodeRequest decodes request payload into out. Handlers may call this with bespoke structs.
+func decodeRequest(r *http.Request, out any) error {
+	if r.Header.Get("Content-Type") == "application/json" {
+		return json.NewDecoder(r.Body).Decode(out)
+	}
+	return schema.NewDecoder().Decode(out, r.URL.Query())
+}
+
 // generateRoutesFromConfig generates routes and base configuration from a provided configuration and internal config file.
-func routes(config *config.Config, internalConfigPath string) (*base, []router.Route, error) {
+func routes(config *config.Config, internalConfigOverride *[]byte) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{}
-
-	if internalConfigPath == "" {
-		internalConfigPath = "./internal/device/meross/device.yaml"
+	internalConfig := defaultInternalConfig
+	if internalConfigOverride != nil {
+		internalConfig = *internalConfigOverride
 	}
 
-	internalConfigFile, err := os.ReadFile(internalConfigPath)
-	if err != nil {
-		return nil, []router.Route{}, err
-	}
-
-	if err := yaml.Unmarshal(internalConfigFile, &base); err != nil {
+	if err := yaml.Unmarshal(internalConfig, &base); err != nil {
 		return nil, []router.Route{}, err
 	}
 	if len(base.Endpoints) == 0 || base.BaseTemplate == "" {
-		return nil, []router.Route{}, fmt.Errorf("unable to load internalConfigPath \"%s\"", internalConfigPath)
+		return nil, []router.Route{}, fmt.Errorf("unable to load internalConfig")
 	}
+
+	// Bind endpoint handlers based on Code.
+	base.wireHandlers()
 
 	for _, d := range config.Devices {
 		if d.Type != "meross" {
@@ -140,6 +164,10 @@ func routes(config *config.Config, internalConfigPath string) (*base, []router.R
 
 		if err := yaml.Unmarshal(yamlConfig, &meross); err != nil {
 			logging.Log(logging.Info, "Unable to unmarshal device config")
+			continue
+		}
+
+		if meross.DeviceType == "thermostat" || meross.DeviceType == "radiator" {
 			continue
 		}
 
@@ -208,14 +236,10 @@ func randomHex(n int) string {
 }
 
 func md5SumString(s string) string {
-	// Calculate the MD5 hash
 	hasher := md5.New()
 	hasher.Write([]byte(s))
 	hashBytes := hasher.Sum(nil)
-
-	// Convert the hash bytes to a hexadecimal string
 	return hex.EncodeToString(hashBytes)
-
 }
 
 // post constructs and sends a POST request to a Meross device and will return a flattened status when the method is equal to GET.
@@ -242,7 +266,7 @@ func (m *meross) post(method string, endpoint endpoint, value json.Number) (*sta
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// Send the request and get the response
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -263,7 +287,6 @@ func (m *meross) post(method string, endpoint endpoint, value json.Number) (*sta
 	}
 
 	rawResponse := rawStatus{}
-
 	if err := json.Unmarshal(body, &rawResponse); err != nil {
 		return nil, err
 	}
@@ -282,12 +305,14 @@ func (m *meross) post(method string, endpoint endpoint, value json.Number) (*sta
 	return &response, err
 }
 
-// Handler is the HTTP handler for Meross device control.
+// ---------------------------
+// Single-device HTTP handler
+// ---------------------------
+
+// handler is the HTTP handler for a single Meross device.
 func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
-	var status *status
-	var err error
 
 	defer func() {
 		device.JSONResponse(w, httpCode, jsonResponse)
@@ -303,95 +328,51 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request := device.Request{}
+	// Buffer request body so we can decode twice (once for routing, once inside handler).
+	var bodyBytes []byte
+	if r.Body != nil {
+		bodyBytes, _ = io.ReadAll(r.Body)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-	if r.Header.Get("Content-Type") == "application/json" {
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed Or Empty JSON Body", nil)
-			return
+	// Decode only to route (device.Request no longer contains Value).
+	baseReq := device.Request{}
+	if err := decodeRequest(r, &baseReq); err != nil {
+		msg := "Malformed Or Empty JSON Body"
+		if r.Header.Get("Content-Type") != "application/json" {
+			msg = "Malformed or empty query string"
 		}
-	} else {
-		if err := schema.NewDecoder().Decode(&request, r.URL.Query()); err != nil {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed or empty query string", nil)
-			return
-		}
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, msg, nil)
+		return
 	}
 
-	endpoint := m.getEndpoint(request.Code)
+	endpoint := m.getEndpoint(baseReq.Code)
 	if endpoint == nil {
 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: code", nil)
 		return
 	}
 
-	if request.Value != "" && endpoint.MaxValue != 0 {
-		valueInt64, err := request.Value.Int64()
-		if err != nil || valueInt64 > endpoint.MaxValue || valueInt64 < endpoint.MinValue || valueInt64 < 0 {
-			errorMessage := fmt.Sprintf("Invalid Parameter: value (Min: %d, Max: %d)", endpoint.MinValue, endpoint.MaxValue)
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, errorMessage, nil)
-			return
-		}
-
-	}
-
-	switch endpoint.Code {
-	case "status":
-		status, err = m.post("GET", *m.getEndpoint("status"), "")
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", status)
+	if endpoint.Handler == nil {
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "No handler bound", nil)
 		return
-	case "toggle":
-		if request.Value == "" {
-			status, err = m.post("GET", *m.getEndpoint("status"), "")
-			if err != nil {
-				logging.Log(logging.Error, err.Error())
-				httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-				return
-			}
-
-			request.Value = toJsonNumber(1 - status.Onoff)
-		}
-
-		_, err = m.post("SET", *endpoint, request.Value)
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-
-	case "fade":
-		_, err = m.post("SET", *m.getEndpoint("toggle"), toJsonNumber(0))
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-		_, err = m.post("SET", *endpoint, toJsonNumber(-1))
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-
-	default:
-		if request.Value == "" {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: value", nil)
-			return
-		}
-		_, err = m.post("SET", *endpoint, request.Value)
-		if err != nil {
-			logging.Log(logging.Error, err.Error())
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
 	}
 
-	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
+	// Restore body for bespoke handler decode.
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+
+	result, err := endpoint.Handler.HandleSingle(m, r)
+	if err != nil {
+		logging.Log(logging.Error, err.Error())
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		return
+	}
+
+	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", result)
 }
+
+// ---------------------------
+// Base / multi-device logic
+// ---------------------------
 
 // getDeviceNames returns the names of all Meross devices in the base configuration.
 func (b *base) getDeviceNames() []string {
@@ -426,15 +407,15 @@ func (b *base) multiPost(devices []*meross, method string, endpoint string, valu
 				Status: nil,
 			}
 
-			status, err := m.post(method, *m.getEndpoint(endpoint), value)
+			st, err := m.post(method, *m.getEndpoint(endpoint), value)
 			if err != nil {
 				responses <- &response
 				return
 			}
-			if status == nil {
+			if st == nil {
 				response.Status = "OK"
 			} else {
-				response.Status = status
+				response.Status = st
 			}
 			responses <- &response
 		}(m, method, endpoint, value)
@@ -448,7 +429,7 @@ func (b *base) multiPost(devices []*meross, method string, endpoint string, valu
 	return responses
 }
 
-// Handler is the HTTP handler for handling requests to control multiple Meross devices.
+// handler is the HTTP handler for handling requests to control multiple Meross devices.
 func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
@@ -465,26 +446,30 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request := device.Request{}
+	// Buffer for dual decode.
+	var bodyBytes []byte
+	if r.Body != nil {
+		bodyBytes, _ = io.ReadAll(r.Body)
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-	if r.Header.Get("Content-Type") == "application/json" {
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed Or Empty JSON Body", nil)
-			return
+	// Decode only to route (device.Request no longer contains Value).
+	baseReq := device.Request{}
+	if err := decodeRequest(r, &baseReq); err != nil {
+		msg := "Malformed Or Empty JSON Body"
+		if r.Header.Get("Content-Type") != "application/json" {
+			msg = "Malformed or empty query string"
 		}
-	} else {
-		if err := schema.NewDecoder().Decode(&request, r.URL.Query()); err != nil {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Malformed or empty query string", nil)
-			return
-		}
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, msg, nil)
+		return
 	}
 
-	if request.Hosts == "" {
+	if baseReq.Hosts == "" {
 		httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: hosts", nil)
 		return
 	}
 
-	hosts := strings.Split(strings.ReplaceAll(request.Hosts, " ", ""), ",")
+	hosts := strings.Split(strings.ReplaceAll(baseReq.Hosts, " ", ""), ",")
 
 	var devices []*meross
 	var endpoint *endpoint
@@ -496,14 +481,14 @@ DUPLICATE_DEVICE:
 			return
 		}
 
-		endpoint = m.getEndpoint(request.Code)
+		endpoint = m.getEndpoint(baseReq.Code)
 		if endpoint == nil {
 			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, fmt.Sprintf("Invalid Parameter for device '%s': code", m.Name), nil)
 			return
 		}
 
-		for _, device := range devices {
-			if m == device {
+		for _, d := range devices {
+			if m == d {
 				continue DUPLICATE_DEVICE
 			}
 		}
@@ -511,147 +496,20 @@ DUPLICATE_DEVICE:
 		devices = append(devices, m)
 	}
 
-	if request.Value != "" && endpoint.MaxValue != 0 {
-		valueInt64, err := request.Value.Int64()
-		if err != nil || valueInt64 > endpoint.MaxValue || valueInt64 < endpoint.MinValue || valueInt64 < 0 {
-			errorMessage := fmt.Sprintf("Invalid Parameter: value (Min: %d, Max: %d)", endpoint.MinValue, endpoint.MaxValue)
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, errorMessage, nil)
-			return
-		}
-
+	if endpoint.Handler == nil {
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "No handler bound", nil)
+		return
 	}
 
-	switch endpoint.Code {
-	case "status":
-		responses := b.multiPost(devices, "GET", "status", "")
+	// Restore body for bespoke handler decode.
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
-		responseStruct := struct {
-			Devices []*namedStatus `json:"devices,omitempty"`
-			Errors  []string       `json:"errors,omitempty"`
-		}{}
-
-		for r := range responses {
-			if r.Status == nil {
-				responseStruct.Errors = append(responseStruct.Errors, r.Name)
-				continue
-			}
-			responseStruct.Devices = append(responseStruct.Devices, r)
-		}
-
-		sort.SliceStable(responseStruct.Devices, func(i int, j int) bool {
-			return responseStruct.Devices[i].Name < responseStruct.Devices[j].Name
-		})
-
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", responseStruct)
-	case "toggle":
-		valueTally := int64(0)
-
-		if request.Value == "" {
-			request.Value = toJsonNumber(0)
-
-			responses := b.multiPost(devices, "GET", "status", "")
-			devices = nil
-
-			for r := range responses {
-				if r.Status == nil {
-					continue
-				}
-				// Capture non-errored devices
-				devices = append(devices, b.getDevice(r.Name))
-
-				var status *status
-				yamlConfig, err := yaml.Marshal(r.Status)
-				if err != nil {
-					logging.Log(logging.Error, err.Error())
-					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-					return
-				}
-
-				if err := yaml.Unmarshal(yamlConfig, &status); err != nil {
-					logging.Log(logging.Error, err.Error())
-					httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-					return
-				}
-
-				valueTally += status.Onoff
-			}
-
-			// Each device votes for next state, if most devices are on, all devices will be toggled off and vice versa
-			if len(devices) == 0 {
-				httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-				return
-			} else if valueTally <= int64(len(devices))/2 {
-				request.Value = toJsonNumber(1)
-			}
-		}
-
-		responses := b.multiPost(devices, "SET", "toggle", request.Value)
-
-		devices = nil
-		for r := range responses {
-			if r.Status == nil {
-				continue
-			}
-			devices = append(devices, b.getDevice(r.Name))
-		}
-
-		if len(devices) == 0 {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-		} else {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-		}
-	case "fade":
-		responses := b.multiPost(devices, "SET", "toggle", toJsonNumber(0))
-
-		devices = nil
-		for r := range responses {
-			if r.Status == nil {
-				continue
-			}
-			devices = append(devices, b.getDevice(r.Name))
-		}
-
-		if len(devices) == 0 {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		}
-
-		responses = b.multiPost(devices, "SET", "fade", toJsonNumber(-1))
-
-		devices = nil
-		for r := range responses {
-			if r.Status == nil {
-				continue
-			}
-			devices = append(devices, b.getDevice(r.Name))
-		}
-
-		if len(devices) == 0 {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-		} else {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-		}
-
-	default:
-		if request.Value == "" {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: value", nil)
-			return
-		}
-
-		responses := b.multiPost(devices, "SET", request.Code, request.Value)
-
-		devices = nil
-		for r := range responses {
-			if r.Status == nil {
-				continue
-			}
-			devices = append(devices, b.getDevice(r.Name))
-		}
-
-		if len(devices) == 0 {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-		} else {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
-		}
+	result, err := endpoint.Handler.HandleMulti(b, devices, r)
+	if err != nil {
+		logging.Log(logging.Error, err.Error())
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		return
 	}
+
+	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", result)
 }
