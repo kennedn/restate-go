@@ -78,6 +78,7 @@ func (h StatusHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 type ToggleRequest struct {
 	Code  string      `json:"code" schema:"code"`
 	Value json.Number `json:"value,omitempty" schema:"value"`
+	Hosts string      `json:"hosts,omitempty" schema:"hosts,omitempty"`
 }
 
 // ToggleHandler implements "toggle" behavior for single and multi device.
@@ -179,6 +180,7 @@ func (h ToggleHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 type NumericRequest struct {
 	Code  string      `json:"code" schema:"code"`
 	Value json.Number `json:"value" schema:"value"`
+	Hosts string      `json:"hosts,omitempty" schema:"hosts,omitempty"`
 }
 
 // NumericHandler validates a numeric range per-endpoint and then performs SET.
