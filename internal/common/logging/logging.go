@@ -39,7 +39,7 @@ func _log(level string, message string, args ...any) {
 			_, filename := filepath.Split(file)
 			timestamp := time.Now().Format("2006-01-02 15:04:05.999")
 			message = fmt.Sprintf(message, args...)
-			message = fmt.Sprintf("[%s][%s:%d][%s]\t%s", timestamp, filename, line, level, message)
+			message = fmt.Sprintf("[%023s] %-20s [%-5s] %s", timestamp, fmt.Sprintf("[%s:%d]", filename, line), level, message)
 		}
 		logger.Println(message)
 	}
