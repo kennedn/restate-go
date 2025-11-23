@@ -11,9 +11,9 @@ import (
 	"github.com/kennedn/restate-go/internal/device/bthome"
 	"github.com/kennedn/restate-go/internal/device/common"
 	"github.com/kennedn/restate-go/internal/device/hikvision"
-	"github.com/kennedn/restate-go/internal/device/meross"
-	"github.com/kennedn/restate-go/internal/device/meross_radiator"
-	"github.com/kennedn/restate-go/internal/device/meross_thermostat"
+	"github.com/kennedn/restate-go/internal/device/meross/msgeneric"
+	"github.com/kennedn/restate-go/internal/device/meross/msh300hk"
+	"github.com/kennedn/restate-go/internal/device/meross/mts200b"
 	"github.com/kennedn/restate-go/internal/device/snowdon"
 	"github.com/kennedn/restate-go/internal/device/tvcom"
 	"github.com/kennedn/restate-go/internal/device/wol"
@@ -31,9 +31,9 @@ type Devices struct {
 var (
 	devices = []Device{
 		&alert.Device{},
-		&meross.Device{},
-		&meross_radiator.Device{},
-		&meross_thermostat.Device{},
+		&msgeneric.Device{},
+		&mts200b.Device{},
+		&msh300hk.Device{},
 		&snowdon.Device{},
 		&tvcom.Device{},
 		&wol.Device{},

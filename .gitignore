@@ -1,2 +1,4 @@
 experiments/
 input.yaml
+__debug*
+coverage.out
