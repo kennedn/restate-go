@@ -223,6 +223,10 @@ func (l *listener) connectionLostCallback(_ mqtt.Client, err error) {
 	logging.Log(logging.Info, "MQTT connection lost: %v", err)
 }
 
+var radiatorLastProcessed = make(map[string]time.Time)
+var settleTime = 5 * time.Minute
+
+// subscriptionCallback is called when a message is received on the subscribed MQTT topic.
 func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 	status := rawStatus{}
 	if err := json.Unmarshal(message.Payload(), &status); err != nil {
@@ -248,8 +252,17 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 		return
 	}
 
+	// Sanity check: Skip if already processed within the last 5 minutes
+	if lastProcessed, ok := radiatorLastProcessed[radiatorStatus.Id]; ok && time.Since(lastProcessed) < settleTime {
+		logging.Log(logging.Info, "Skipping processing for id %s as it was processed recently", radiatorStatus.Id)
+		return
+	}
+
 	l.boilerSync()
 	l.btHomeSyncTemperature(radiatorStatus)
+
+	// Update last processed time
+	radiatorLastProcessed[radiatorStatus.Id] = time.Now()
 }
 
 // btHomeSyncTemperature uses external BTHome temperature sensors to make adjustments to the onboard Meross TRV temperature reading
