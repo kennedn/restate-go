@@ -1,0 +1,1 @@
+{"payload":{"all":{"digest":{"thermostat":{"mode":[{"onoff":1,"mode":2,"currentTemp":200,"targetTemp":220},{"onoff":0,"mode":3,"currentTemp":195,"targetTemp":205}],"windowOpened":[{"status":0},{"status":1}]}}}}}

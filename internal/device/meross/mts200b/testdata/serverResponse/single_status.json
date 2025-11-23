@@ -1,0 +1,36 @@
+{
+    "payload": {
+        "mode": [
+            {
+                "onoff": 1,
+                "mode": 2,
+                "currentTemp": 200,
+                "targetTemp": 220
+            }
+        ],
+        "windowOpened": [
+            {
+                "status": 0
+            }
+        ],
+        "all": {
+            "digest": {
+                "thermostat": {
+                    "mode": [
+                        {
+                            "onoff": 1,
+                            "mode": 2,
+                            "currentTemp": 200,
+                            "targetTemp": 220
+                        }
+                    ],
+                    "windowOpened": [
+                        {
+                            "status": 0
+                        }
+                    ]
+                }
+            }
+        }
+    }
+}

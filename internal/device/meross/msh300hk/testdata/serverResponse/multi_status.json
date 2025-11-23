@@ -1,0 +1,117 @@
+{
+    "payload": {
+        "all": [
+            {
+                "id": "dev1",
+                "scheduleBMode": 0,
+                "online": {
+                    "status": 1,
+                    "lastActiveTime": 0
+                },
+                "togglex": {
+                    "onoff": 1
+                },
+                "timeSync": {
+                    "state": 0
+                },
+                "mode": {
+                    "state": 3
+                },
+                "temperature": {
+                    "room": 200,
+                    "currentSet": 220,
+                    "heating": 1,
+                    "openWindow": 0
+                }
+            },
+            {
+                "id": "dev2",
+                "scheduleBMode": 0,
+                "online": {
+                    "status": 1,
+                    "lastActiveTime": 0
+                },
+                "togglex": {
+                    "onoff": 1
+                },
+                "timeSync": {
+                    "state": 0
+                },
+                "mode": {
+                    "state": 3
+                },
+                "temperature": {
+                    "room": 200,
+                    "currentSet": 220,
+                    "heating": 1,
+                    "openWindow": 0
+                }
+            },
+            {
+                "id": "dev3",
+                "scheduleBMode": 0,
+                "online": {
+                    "status": 1,
+                    "lastActiveTime": 0
+                },
+                "togglex": {
+                    "onoff": 0
+                },
+                "timeSync": {
+                    "state": 0
+                },
+                "mode": {
+                    "state": 1
+                },
+                "temperature": {
+                    "room": 190,
+                    "currentSet": 190,
+                    "heating": 0,
+                    "openWindow": 1
+                }
+            }
+        ],
+        "battery": [
+            {
+                "id": "dev1",
+                "value": 95
+            },
+            {
+                "id": "dev2",
+                "value": 85
+            },
+            {
+                "id": "dev3",
+                "value": 80
+            }
+        ],
+        "mode": [
+            {
+                "id": "dev1",
+                "state": 3
+            },
+            {
+                "id": "dev2",
+                "state": 3
+            },
+            {
+                "id": "dev3",
+                "state": 3
+            }
+        ],
+        "adjust": [
+            {
+                "id": "dev1",
+                "temperature": 270
+            },
+            {
+                "id": "dev2",
+                "temperature": 330
+            },
+            {
+                "id": "dev3",
+                "temperature": 220
+            }
+        ]
+    }
+}

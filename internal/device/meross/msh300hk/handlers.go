@@ -3,6 +3,7 @@ package msh300hk
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -27,7 +28,7 @@ func (b *base) wireHandlers() {
 		case "adjust":
 			ep.Handler = AdjustHandler{Min: -32767, Max: 32767} // typical TRV target range
 		default:
-			ep.Handler = DefaultHandler{}
+			log.Fatalf("Unhandled endpoint code '%s' in msh300hk device", ep.Code)
 		}
 	}
 }
@@ -40,82 +41,7 @@ func (b *base) wireHandlers() {
 type CodeValueRequest struct {
 	Code  string      `json:"code" schema:"code"`
 	Value json.Number `json:"value,omitempty" schema:"value"`
-}
-
-// DefaultHandler: GET if no value (returns Not Implemented for unknown codes),
-// SET if value present without range checks.
-type DefaultHandler struct{}
-
-func (h DefaultHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
-	req := CodeValueRequest{}
-	if err := decodeRequest(r, &req); err != nil {
-		return nil, err
-	}
-
-	ep := m.getEndpoint(req.Code)
-	if ep == nil {
-		return nil, fmt.Errorf("invalid code")
-	}
-
-	method := "SET"
-	val := req.Value
-	if val == "" {
-		method = "GET"
-		val = toJsonNumber(0) // keep two-placeholder templates happy
-	}
-
-	payload := m.buildPayload(ep.Template, val)
-	_, err := m.post(method, ep.Namespace, payload)
-	if err != nil {
-		return nil, err
-	}
-
-	if method == "SET" {
-		return nil, nil
-	}
-
-	// Unknown GET types remain Not Implemented.
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (h DefaultHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (any, error) {
-	req := CodeValueRequest{}
-	if err := decodeRequest(r, &req); err != nil {
-		return nil, err
-	}
-
-	m0 := devices[0]
-	ep := m0.getEndpoint(req.Code)
-	if ep == nil {
-		return nil, fmt.Errorf("invalid code")
-	}
-
-	method := "SET"
-	val := req.Value
-	if val == "" {
-		method = "GET"
-		val = toJsonNumber(0)
-	}
-
-	var payload strings.Builder
-	for i, m := range devices {
-		payload.WriteString(m.buildPayload(ep.Template, val))
-		if i < len(devices)-1 {
-			payload.WriteString(",")
-		}
-	}
-
-	raw, err := b.post(m0.Host, method, ep.Namespace, payload.String(), m0.Key, m0.Timeout)
-	if err != nil {
-		return nil, err
-	}
-
-	if method == "SET" {
-		return nil, nil
-	}
-
-	_ = raw
-	return nil, fmt.Errorf("not implemented")
+	Hosts string      `json:"hosts,omitempty" schema:"hosts"`
 }
 
 // StatusHandler: GET-only, returns flattened status.

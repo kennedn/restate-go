@@ -3,6 +3,7 @@ package mts200b
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"errors"
@@ -22,8 +23,10 @@ func (b *base) wireHandlers() {
 			ep.Handler = ToggleHandler{}
 		case "mode":
 			ep.Handler = ModeHandler{Min: 0, Max: 4}
+		case "heatTemp":
+			ep.Handler = HeatTempHandler{Min: 50, Max: 350}
 		default:
-			ep.Handler = DefaultHandler{}
+			log.Fatalf("unknown endpoint code %q", ep.Code)
 		}
 	}
 }
@@ -32,61 +35,11 @@ func (b *base) wireHandlers() {
 // Endpoint Handlers
 // ---------------------------
 
-// DefaultRequest is the generic per-endpoint request shape (now endpoint-specific).
-type DefaultRequest struct {
+// CodeValueRequest is the generic request shape for endpoints that accept an optional value.
+type CodeValueRequest struct {
 	Code  string      `json:"code" schema:"code"`
 	Value json.Number `json:"value,omitempty" schema:"value"`
-}
-
-// DefaultHandler implements the existing "default:" behavior (requires value, no range check).
-type DefaultHandler struct{}
-
-func (h DefaultHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
-	req := DefaultRequest{}
-	if err := decodeRequest(r, &req); err != nil {
-		return nil, err
-	}
-
-	ep := m.getEndpoint(req.Code)
-	if ep == nil {
-		return nil, fmt.Errorf("invalid code")
-	}
-
-	if req.Value == "" {
-		return nil, fmt.Errorf("invalid value")
-	}
-
-	_, err := m.post("SET", *ep, req.Value)
-	if err != nil {
-		return nil, err
-	}
-
-	return nil, nil
-}
-
-func (h DefaultHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (any, error) {
-	req := DefaultRequest{}
-	if err := decodeRequest(r, &req); err != nil {
-		return nil, err
-	}
-
-	if req.Value == "" {
-		return nil, fmt.Errorf("invalid value")
-	}
-
-	responses := b.multiPost(devices, "SET", req.Code, req.Value)
-
-	ok := 0
-	for ns := range responses {
-		if ns.Status != nil {
-			ok++
-		}
-	}
-	if ok == 0 {
-		return nil, fmt.Errorf("all devices errored")
-	}
-
-	return nil, nil
+	Hosts string      `json:"hosts,omitempty" schema:"hosts"`
 }
 
 // StatusHandler implements "status" behavior for single and multi device.
@@ -116,18 +69,12 @@ func (h StatusHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 	return nil, errors.New("not implemented")
 }
 
-// ToggleRequest is a bespoke request shape for toggle endpoints.
-type ToggleRequest struct {
-	Code  string      `json:"code" schema:"code"`
-	Value json.Number `json:"value,omitempty" schema:"value"`
-}
-
 // ToggleHandler implements "toggle" behavior for single and multi device.
 // Validation is endpoint-specific here.
 type ToggleHandler struct{}
 
 func (h ToggleHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
-	req := ToggleRequest{}
+	req := CodeValueRequest{}
 	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
@@ -158,12 +105,6 @@ func (h ToggleHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 	return nil, errors.New("not implemented")
 }
 
-// ToggleRequest is a bespoke request shape for toggle endpoints.
-type ModeRequest struct {
-	Code  string      `json:"code" schema:"code"`
-	Value json.Number `json:"value,omitempty" schema:"value"`
-}
-
 // ModeHandler: GET if no value, SET if value present. Bespoke range validation.
 type ModeHandler struct {
 	Min int64
@@ -182,7 +123,7 @@ func (h ModeHandler) validate(v json.Number) (json.Number, error) {
 }
 
 func (h ModeHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
-	req := ModeRequest{}
+	req := CodeValueRequest{}
 	if err := decodeRequest(r, &req); err != nil {
 		return nil, err
 	}
@@ -219,5 +160,63 @@ func (h ModeHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 }
 
 func (h ModeHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (any, error) {
+	return nil, errors.New("not implemented")
+}
+
+// HeatTempHandler: GET if no value, SET if value present. Bespoke range validation.
+type HeatTempHandler struct {
+	Min int64
+	Max int64
+}
+
+func (h HeatTempHandler) validate(v json.Number) (json.Number, error) {
+	if v == "" {
+		return "", nil
+	}
+	i, err := v.Int64()
+	if err != nil || i < h.Min || i > h.Max {
+		return "", fmt.Errorf("invalid value (min %d, max %d)", h.Min, h.Max)
+	}
+	return v, nil
+}
+
+func (h HeatTempHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
+	req := CodeValueRequest{}
+	if err := decodeRequest(r, &req); err != nil {
+		return nil, err
+	}
+
+	val, err := h.validate(req.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	ep := m.getEndpoint("heatTemp")
+	if ep == nil {
+		return nil, fmt.Errorf("invalid code")
+	}
+
+	method := "SET"
+	if val == "" {
+		method = "GET"
+		val = toJsonNumber(0)
+	}
+
+	out, err := m.post(method, *ep, val)
+	if err != nil {
+		return nil, err
+	}
+	if method == "SET" {
+		return nil, nil
+	}
+
+	response := map[string]any{
+		"heatTemp": out.Payload.Mode[0].HeatTemp,
+	}
+
+	return response, nil
+}
+
+func (h HeatTempHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (any, error) {
 	return nil, errors.New("not implemented")
 }
