@@ -34,13 +34,15 @@ type btHomeResponse struct {
 }
 
 type radiatorConfig struct {
-	Name string   `yaml:"name"`
-	Ids  []string `yaml:"ids"`
+	Name       string   `yaml:"name"`
+	DeviceType string   `yaml:"deviceType"`
+	Ids        []string `yaml:"ids"`
 }
 
 type radiatorStatus struct {
-	Room int64  `json:"room"`
-	Id   string `json:"id"`
+	CurrentSet int64  `json:"currentSet"`
+	Room       int64  `json:"room"`
+	Id         string `json:"id"`
 }
 
 // rawStatus represents the raw status response from a Meross thermostat device.
@@ -75,6 +77,9 @@ type listenerConfig struct {
 	Radiator struct {
 		URL string `yaml:"url"`
 	} `yaml:"radiator"`
+	Thermostat struct {
+		URL string `yaml:"url"`
+	} `yaml:"thermostat"`
 }
 
 type base struct {
@@ -99,7 +104,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 
 	// Build map of radiator IDs to names for meross_radiator devices
 	for _, d := range config.Devices {
-		if d.Type != "meross_radiator" {
+		if d.Type != "meross" {
 			continue
 		}
 
@@ -114,6 +119,10 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		// Unmarshal the YAML config into the deviceConfig struct
 		if err := yaml.Unmarshal(yamlConfig, &radiatorConfig); err != nil {
 			logging.Log(logging.Info, "Unable to unmarshal device config")
+			continue
+		}
+
+		if radiatorConfig.DeviceType != "radiator" {
 			continue
 		}
 
@@ -227,8 +236,15 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 		radiatorStatus = &status.Payload.Temperature[0]
 	}
 
+	// Always perform boiler sync on currentSet updates
+	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" && radiatorStatus != nil && radiatorStatus.CurrentSet != 0 {
+		l.boilerSync()
+		return
+	}
+
 	// Only process messages with the correct namespace and room data
 	if status.Header.Namespace != "Appliance.Hub.Mts100.Temperature" || radiatorStatus == nil || radiatorStatus.Id == "" || radiatorStatus.Room == 0 {
+		// logging.Log(logging.Info, "Ignored MQTT message with namespace %s and body %s", status.Header.Namespace, string(message.Payload()))
 		return
 	}
 
@@ -317,11 +333,13 @@ func (l *listener) boilerSync() {
 
 	if !heating {
 		// Toggle boiler to OFF state
+		l.setThermostatHeat(50) // Set to 5.0 degrees to effectively turn off heating
 		logging.Log(logging.Info, "No TRVs are requesting heat")
 		return
 	}
 
 	// Toggle boiler to ON state
+	l.setThermostatHeat(350) // Set to 35.0 degrees to effectively turn on heating
 	logging.Log(logging.Info, "At least one TRV requests heat")
 }
 
@@ -424,6 +442,19 @@ func (l *listener) getRadiatorAdjust(id string) (*radiatorResponse, int, error) 
 // @return HTTP status code, and error if any.
 func (l *listener) setRadiatorAdjust(id string, value int64) (int, error) {
 	_, httpStatus, err := l.post(fmt.Sprintf("%s/%s", l.Config.Radiator.URL, id), map[string]string{"code": "adjust", "value": fmt.Sprintf("%d", value)})
+	if err != nil || httpStatus != 200 {
+		return httpStatus, err
+	}
+
+	return httpStatus, nil
+}
+
+// setThermostatHeat sets the thermostat heat temperature for a given ID and value.
+// @param id The radiator ID.
+// @param value The adjustment value to set.
+// @return HTTP status code, and error if any.
+func (l *listener) setThermostatHeat(value int64) (int, error) {
+	_, httpStatus, err := l.post(l.Config.Thermostat.URL, map[string]string{"code": "heatTemp", "value": fmt.Sprintf("%d", value)})
 	if err != nil || httpStatus != 200 {
 		return httpStatus, err
 	}
