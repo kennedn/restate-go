@@ -9,6 +9,7 @@ import (
 	"github.com/kennedn/restate-go/internal/common/logging"
 	"github.com/kennedn/restate-go/internal/device"
 	"github.com/kennedn/restate-go/internal/mqtt/frigate"
+	"github.com/kennedn/restate-go/internal/mqtt/thermostat"
 	"github.com/kennedn/restate-go/internal/router"
 	"gopkg.in/yaml.v3"
 )
@@ -49,7 +50,13 @@ func main() {
 		logging.Log(logging.Info, err.Error())
 	}
 
-	if len(routes) == 0 && len(listeners) == 0 {
+	thermostat := &thermostat.Device{}
+	listeners2, err := thermostat.Listeners(&configMap)
+	if err != nil {
+		logging.Log(logging.Info, err.Error())
+	}
+
+	if len(routes) == 0 && len(listeners) == 0 && len(listeners2) == 0 {
 		logging.Log(logging.Error, "No devices or listeners provided, nothing left to do")
 		os.Exit(1)
 	}

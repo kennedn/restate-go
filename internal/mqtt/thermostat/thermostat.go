@@ -2,92 +2,57 @@ package thermostat
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
-	alert "github.com/kennedn/restate-go/internal/device/alert/common"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
 	"gopkg.in/yaml.v3"
 )
 
-// Event represents the structure of the event received from MQTT.
-type review struct {
-	Type   string `json:"type"`
-	Before detail `json:"before"`
-	After  detail `json:"after"`
-}
-
-// Detail represents the detailed information of the event.
-type detail struct {
-	ID        string   `json:"id"`
-	Camera    string   `json:"camera"`
-	StartTime float64  `json:"start_time"`
-	EndTime   *float64 `json:"end_time,omitempty"`
-	Severity  string   `json:"severity"`
-	ThumbPath string   `json:"thumb_path"`
-	Data      struct {
-		Detections []string `json:"detections"`
-		Objects    []string `json:"objects"`
-		SubLabels  []string `json:"sub_labels"`
-		Zones      []string `json:"zones"`
-		Audio      []string `json:"audio"`
+type radiatorResponse struct {
+	Data []struct {
+		Status struct {
+			Temperature struct {
+				Heating bool `json:"heating"`
+			} `json:"temperature,omitempty"`
+		} `json:"status,omitempty"`
+		Value json.Number `json:"value,omitempty"`
 	} `json:"data"`
 }
 
-type event struct {
-	Area               json.Number `json:"area"`
-	Box                []float64   `json:"box"`
-	Camera             string      `json:"camera"`
-	Data               eventData   `json:"data"`
-	DetectorType       string      `json:"detector_type"`
-	EndTime            float64     `json:"end_time"`
-	FalsePositive      bool        `json:"false_positive"`
-	HasClip            bool        `json:"has_clip"`
-	HasSnapshot        bool        `json:"has_snapshot"`
-	ID                 string      `json:"id"`
-	Label              string      `json:"label"`
-	ModelHash          string      `json:"model_hash"`
-	ModelType          string      `json:"model_type"`
-	PlusID             *string     `json:"plus_id"`
-	Ratio              json.Number `json:"ratio"`
-	Region             []float64   `json:"region"`
-	RetainIndefinitely bool        `json:"retain_indefinitely"`
-	Score              *float64    `json:"score"`
-	StartTime          float64     `json:"start_time"`
-	SubLabel           *string     `json:"sub_label"`
-	Thumbnail          string      `json:"thumbnail"`
-	TopScore           *float64    `json:"top_score"`
-	Zones              []string    `json:"zones"`
+type btHomeResponse struct {
+	Data struct {
+		Temperature json.Number `json:"temperature"`
+	} `json:"data"`
 }
 
-type eventData struct {
-	Attributes []string  `json:"attributes"`
-	Box        []float64 `json:"box"`
-	Region     []float64 `json:"region"`
-	Score      float64   `json:"score"`
-	TopScore   float64   `json:"top_score"`
-	Type       string    `json:"type"`
+type radiatorConfig struct {
+	Name       string   `yaml:"name"`
+	DeviceType string   `yaml:"deviceType"`
+	Ids        []string `yaml:"ids"`
 }
 
-type rawResponse struct {
-	Status int      `json:"status"`
-	Errors []string `json:"errors,omitempty"`
+type radiatorStatus struct {
+	CurrentSet int64  `json:"currentSet"`
+	Room       int64  `json:"room"`
+	Id         string `json:"id"`
+}
+
+// rawStatus represents the raw status response from a Meross thermostat device.
+type rawStatus struct {
+	Header struct {
+		Namespace string `json:"namespace"`
+	} `json:"header"`
+	Payload struct {
+		Temperature []radiatorStatus `json:"temperature"`
+	} `json:"payload"`
 }
 
 // Device represents an MQTT device that listens to messages and triggers alerts.
@@ -100,63 +65,29 @@ type listener struct {
 type listenerConfig struct {
 	Name    string `yaml:"name"`
 	Client  mqtt.Client
-	Timeout uint `yaml:"timeoutMs"`
+	Timeout uint   `yaml:"timeoutMs"`
+	HubUUID string `yaml:"hubUUID"`
 	MQTT    struct {
 		Host string `yaml:"host"`
 		Port int    `yaml:"port"`
 	} `yaml:"mqtt"`
-	Alert struct {
-		URL      string `yaml:"url"`
-		Token    string `yaml:"token"`
-		User     string `yaml:"user"`
-		Priority int    `yaml:"priority"`
-	} `yaml:"alert"`
-	Frigate struct {
-		URL         string `yaml:"url"`
-		ExternalUrl string `yaml:"externalUrl"`
-		CacheEvents bool   `yaml:"cacheEvents"`
-		CachePath   string `yaml:"cachePath"`
-	} `yaml:"frigate"`
+	BTHome struct {
+		URL string `yaml:"url"`
+	} `yaml:"bthome"`
+	Radiator struct {
+		URL string `yaml:"url"`
+	} `yaml:"radiator"`
+	Thermostat struct {
+		URL string `yaml:"url"`
+	} `yaml:"thermostat"`
 }
 
 type base struct {
-	Listeners []*listener
+	Listeners   []*listener
+	RadiatorMap map[string]string
 }
 
 type Device struct{}
-
-// toJsonNumber converts a numeric value to a JSON number.
-func toJsonNumber(value any) json.Number {
-	return json.Number(fmt.Sprintf("%d", value))
-}
-
-func humanizeString(str string) string {
-	strArr := []string{}
-	for _, word := range strings.Split(str, "_") {
-		strArr = append(strArr, cases.Title(language.English).String(word))
-	}
-	return strings.Join(strArr, " ")
-}
-
-func joinStringSlice(str []string, seperator string, humanize bool) string {
-	strArr := []string{}
-	for _, s := range str {
-		if humanize {
-			strArr = append(strArr, humanizeString(s))
-		} else {
-			strArr = append(strArr, s)
-		}
-	}
-	return strings.Join(strArr, seperator)
-}
-
-func randomHex(n int) string {
-	bytes := make([]byte, n)
-	if _, err := rand.Read(bytes); err != nil {
-		return ""
-	}
-	return hex.EncodeToString(bytes)
-}
 
 // Create mqtt Listeners from a config
 func (d *Device) Listeners(config *config.Config) ([]listener, error) {
@@ -169,10 +100,45 @@ func (d *Device) Listeners(config *config.Config) ([]listener, error) {
 func listeners(config *config.Config, client mqtt.Client) (*base, []listener, error) {
 	listeners := []listener{}
 	base := base{}
+	base.RadiatorMap = map[string]string{}
 
-	// Iterate through each device in the configuration
+	// Build map of radiator IDs to names for meross_radiator devices
 	for _, d := range config.Devices {
-		if d.Type != "frigate" {
+		if d.Type != "meross" {
+			continue
+		}
+
+		radiatorConfig := radiatorConfig{}
+		// Marshal the device config to YAML
+		yamlConfig, err := yaml.Marshal(d.Config)
+		if err != nil {
+			logging.Log(logging.Info, "Unable to marshal device config")
+			continue
+		}
+
+		// Unmarshal the YAML config into the deviceConfig struct
+		if err := yaml.Unmarshal(yamlConfig, &radiatorConfig); err != nil {
+			logging.Log(logging.Info, "Unable to unmarshal device config")
+			continue
+		}
+
+		if radiatorConfig.DeviceType != "radiator" {
+			continue
+		}
+
+		for _, id := range radiatorConfig.Ids {
+			base.RadiatorMap[id] = radiatorConfig.Name
+		}
+	}
+
+	// Check if any listeners were created
+	if len(base.RadiatorMap) == 0 {
+		return nil, []listener{}, errors.New("no radiator devices found in config")
+	}
+
+	// Iterate through each thermostat device in the configuration
+	for _, d := range config.Devices {
+		if d.Type != "thermostat" {
 			continue
 		}
 
@@ -195,7 +161,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		}
 
 		// Check for missing parameters in the listenerConfig
-		if listenerConfig.Name == "" || listenerConfig.Timeout == 0 || listenerConfig.MQTT.Host == "" || listenerConfig.Frigate.URL == "" || listenerConfig.Alert.URL == "" {
+		if listenerConfig.Name == "" || listenerConfig.Timeout == 0 || listenerConfig.HubUUID == "" || listenerConfig.MQTT.Host == "" {
 			logging.Log(logging.Info, "Unable to load device due to missing parameters")
 			continue
 		}
@@ -204,20 +170,14 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		if listenerConfig.MQTT.Port == 0 {
 			listenerConfig.MQTT.Port = 1883
 		}
-		if listenerConfig.Frigate.ExternalUrl == "" {
-			listenerConfig.Frigate.ExternalUrl = listenerConfig.Frigate.URL
-		}
-		if listenerConfig.Frigate.CacheEvents && listenerConfig.Frigate.CachePath == "" {
-			listenerConfig.Frigate.CachePath = "/tmp/cache"
-		}
 
 		// Create MQTT client if not provided
 		if client == nil {
 			clientOpts := mqtt.NewClientOptions()
-			// Ensure subscriptions are re-established upon reconnect
-			clientOpts.SetCleanSession(false)
 			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
-			clientOpts.SetClientID(randomHex(16))
+			clientOpts.SetClientID("thermostat-restate-go")
+			clientOpts.SetOnConnectHandler(listener.connectionCallback)
+			clientOpts.SetConnectionLostHandler(listener.connectionLostCallback)
 			client = mqtt.NewClient(clientOpts)
 		}
 
@@ -249,274 +209,146 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 	return &base, listeners, nil
 }
 
+func (l *listener) connectionCallback(client mqtt.Client) {
+	logging.Log(logging.Info, "MQTT connected")
+	token := client.Subscribe(fmt.Sprintf("/appliance/%s/publish", l.Config.HubUUID), 0, l.subscriptionCallback)
+	if err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond); err != nil {
+		logging.Log(logging.Error, "Failed to subscribe to MQTT topic: %v", token.Error())
+	} else {
+		logging.Log(logging.Info, "Successfully subscribed to MQTT topic")
+	}
+}
+
+func (l *listener) connectionLostCallback(_ mqtt.Client, err error) {
+	logging.Log(logging.Info, "MQTT connection lost: %v", err)
+}
+
 func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
-	review := review{}
-	if err := json.Unmarshal(message.Payload(), &review); err != nil {
+	status := rawStatus{}
+	if err := json.Unmarshal(message.Payload(), &status); err != nil {
 		logging.Log(logging.Error, "Failed to unmarshal MQTT message: %v", err)
 		return
 	}
 
-	// Download a copy of each detection at the end of a given event for restic backup
-	if l.Config.Frigate.CacheEvents && review.Type == "end" {
-		// Download each detection in parallel
-		var wg sync.WaitGroup
-		// Parallel downloads can saturate IO, so create a ballpark timeout based on the number of detections to give downloads a chance to complete
-		timeout := time.Duration(int(l.Config.Timeout)*(len(review.After.Data.Detections)+1)) * time.Millisecond
-		for _, eventId := range review.After.Data.Detections {
-			wg.Add(1)
-			go func(eventId string) {
-				defer wg.Done()
-				err := l.downloadEvent(eventId, review.After.Severity, timeout)
-				if err != nil {
-					logging.Log(logging.Error, "Failed to cache event %s: %v", eventId, err)
-				} else {
-					logging.Log(logging.Info, "Cached event %s", eventId)
-				}
-			}(eventId)
+	// Extract radiatorStatus information safely
+	var radiatorStatus *radiatorStatus
+	if len(status.Payload.Temperature) != 0 {
+		radiatorStatus = &status.Payload.Temperature[0]
+	}
 
-		}
-		wg.Wait()
-		// Remove clips that no longer have an assosiated event in frigate
-		err := l.removeOldClips()
-		if err != nil {
-			logging.Log(logging.Error, "Failed to remove old clips: %v", err)
-		}
+	// Always perform boiler sync on currentSet updates
+	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" && radiatorStatus != nil && radiatorStatus.CurrentSet != 0 {
+		l.boilerSync()
 		return
 	}
 
-	// Return if this is not a new alert or an upgrade from detection to alert
-	if !((review.Type == "new" && review.After.Severity == "alert") ||
-		(review.Type == "update" && review.Before.Severity == "detection" && review.After.Severity == "alert")) {
+	// Only process messages with the correct namespace and room data
+	if status.Header.Namespace != "Appliance.Hub.Mts100.Temperature" || radiatorStatus == nil || radiatorStatus.Id == "" || radiatorStatus.Room == 0 {
+		// logging.Log(logging.Info, "Ignored MQTT message with namespace %s and body %s", status.Header.Namespace, string(message.Payload()))
 		return
 	}
 
-	// Process the event and create alert request
-	alertRequest := l.createAlertRequest(&review)
-
-	_, _, _ = l.sendAlert(alertRequest)
+	l.boilerSync()
+	l.btHomeSyncTemperature(radiatorStatus)
 }
 
-// Subscribe to frigate reviews topic and process review messages.
-func (l *listener) Listen() {
-	if l.Config.Client == nil {
-		logging.Log(logging.Error, "MQTT client is not initialized")
+// btHomeSyncTemperature uses external BTHome temperature sensors to make adjustments to the onboard Meross TRV temperature reading
+// @param message The MQTT message containing the thermostat status
+func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
+	btHomeName, ok := l.Base.RadiatorMap[radiatorStatus.Id]
+	if !ok {
+		logging.Log(logging.Info, "Unable to find device with id %s in radiator map", radiatorStatus.Id)
 		return
 	}
 
-	// Configure callback for frigate reviews topic
-	token := l.Config.Client.Subscribe("frigate/reviews", 0, l.subscriptionCallback)
-
-	// Check that subscription to topic occured
-	if err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond); err != nil {
-		logging.Log(logging.Error, "Failed to subscribe to MQTT topic: %v", token.Error())
+	// Get BTHome response
+	btHomeResponse, httpStatus, err := l.getBTHomeTemperature(btHomeName)
+	if err != nil || httpStatus != 200 {
+		logging.Log(logging.Error, "Failed to get BTHome temperature for %s: %v (HTTP status: %d)", btHomeName, err, httpStatus)
+		return
 	}
+	// Parse BTHome temperature
+	btHomeTemperature, err := btHomeResponse.Data.Temperature.Float64()
+	if err != nil {
+		logging.Log(logging.Error, "Failed to parse BTHome temperature for %s: %v", btHomeName, err)
+		return
+	}
+	// Convert BTHome temperature to meross integer format
+	btHomeTemperatureInt := int64(btHomeTemperature * 10)
+
+	// Get radiator adjust response
+	adjustResponse, httpStatus, err := l.getRadiatorAdjust(radiatorStatus.Id)
+	if err != nil || httpStatus != 200 || len(adjustResponse.Data) == 0 {
+		logging.Log(logging.Error, "Failed to get radiator adjust for %s: %v (HTTP status: %d)", btHomeName, err, httpStatus)
+		return
+	}
+	// Parse radiator adjust value
+	adjustDelta, err := adjustResponse.Data[0].Value.Int64()
+	if err != nil {
+		logging.Log(logging.Error, "Failed to parse radiator adjust for %s: %v", btHomeName, err)
+		return
+	}
+
+	// Meross does not expose a pre-adjusted temperature, so we need to calculate it manually with the adjust delta
+	correctedTemperature := radiatorStatus.Room - (adjustDelta / 10)
+
+	// Calculate new adjust delta
+	delta := (btHomeTemperatureInt - correctedTemperature) * 10
+
+	// Sanity check delta, meross allows +/- 500 max
+	if max(delta, -delta) > 500 {
+		logging.Log(logging.Info, "Delta(%d) exceeds +/- 500 and won't be accepted by TRV, not applying", delta)
+		return
+	}
+
+	// Set new radiator adjust value on the TRV
+	httpStatus, err = l.setRadiatorAdjust(radiatorStatus.Id, delta)
+	if err != nil || httpStatus != 200 {
+		logging.Log(logging.Error, "Failed to set radiator adjust for %s: %v (HTTP status: %d)", btHomeName, err, httpStatus)
+		return
+	}
+	logging.Log(logging.Info, "Synced TRV with name %s (id: %s, bthome_temp: %d, radiator_temp: %d, delta: %d)", btHomeName, radiatorStatus.Id, btHomeTemperatureInt, correctedTemperature, delta/10)
 }
 
-// Remove old clips that no longer have an associated event in frigate
-func (l *listener) removeOldClips() error {
-	// Retrieve all events currently in frigate database
-	url := fmt.Sprintf("%s/api/events?limit=-1", l.Config.Frigate.URL)
-	client := &http.Client{
-		Timeout: time.Duration(l.Config.Timeout) * time.Millisecond,
+// boilerSync checks if any TRVs are requesting heat and toggles the boiler state accordingly
+func (l *listener) boilerSync() {
+	radiatorStatus, httpStatus, err := l.getEachRadiatorStatus()
+	if err != nil || httpStatus != 200 {
+		logging.Log(logging.Error, "Failed to get radiator status: %v (HTTP status: %d)", err, httpStatus)
+		return
 	}
 
-	resp, err := client.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to get events: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get events: received status code %d", resp.StatusCode)
+	if len(radiatorStatus.Data) == 0 {
+		logging.Log(logging.Info, "No radiator status data received")
+		return
 	}
 
-	// Unmarshal events
-	var events []event
-	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
-		return fmt.Errorf("failed to unmarshal events: %w", err)
-	}
-
-	// Create empty map of eventIdMap for quick lookup
-	eventIdMap := make(map[string]struct{})
-	for _, evt := range events {
-		// Skip adding events that exist but no longer contain a clip
-		if !evt.HasClip {
-			continue
-		}
-		eventIdMap[evt.ID] = struct{}{}
-	}
-
-	// List all files in the cache directory
-	files, err := os.ReadDir(l.Config.Frigate.CachePath)
-	if err != nil {
-		return fmt.Errorf("failed to read directory: %w", err)
-	}
-
-	// Extract event IDs from filenames and compare with the event IDs from the endpoint
-	for _, file := range files {
-
-		if file.IsDir() {
-			continue
-		}
-
-		filename := file.Name()
-
-		// Check for .mp4 suffix
-		if !strings.HasSuffix(filename, ".mp4") {
-			continue
-		}
-
-		// Event ID should be part of the filename and separated by underscores
-		splitFilename := strings.Split(filename, "_")
-		if len(splitFilename) == 0 {
-			continue
-		}
-
-		eventID := splitFilename[len(splitFilename)-1]
-		eventID = strings.TrimSuffix(eventID, filepath.Ext(eventID))
-		if _, exists := eventIdMap[eventID]; exists {
-			continue
-		}
-
-		// Remove the file if the event ID no longer exists
-		filePath := fmt.Sprintf("%s/%s", l.Config.Frigate.CachePath, filename)
-		if err := os.Remove(filePath); err != nil {
-			logging.Log(logging.Error, "Failed to remove file %s: %v", filePath, err)
-		} else {
-			logging.Log(logging.Info, "Removed file %s", filePath)
+	heating := false
+	for _, d := range radiatorStatus.Data {
+		if d.Status.Temperature.Heating {
+			heating = true
+			break
 		}
 	}
 
-	return nil
+	if !heating {
+		// Toggle boiler to OFF state
+		l.setThermostatHeat(50) // Set to 5.0 degrees to effectively turn off heating
+		logging.Log(logging.Info, "No TRVs are requesting heat")
+		return
+	}
+
+	// Toggle boiler to ON state
+	l.setThermostatHeat(350) // Set to 35.0 degrees to effectively turn on heating
+	logging.Log(logging.Info, "At least one TRV requests heat")
 }
 
-// Generate a unique filename from a frigate event and download the associated clip
-func (l *listener) downloadEvent(eventId string, severity string, timeout time.Duration) error {
-	// Obtain metadata of event to build filename
-	url := fmt.Sprintf("%s/api/events/%s", l.Config.Frigate.URL, eventId)
-	client := &http.Client{
-		Timeout: timeout,
-	}
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to get event: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to get event: received status code %d", resp.StatusCode)
-	}
-
-	var evt event
-	if err := json.NewDecoder(resp.Body).Decode(&evt); err != nil {
-		return fmt.Errorf("failed to unmarshal event: %w", err)
-	}
-
-	// Must immediatly close the body here as we will be reusing the client
-	resp.Body.Close()
-
-	// Generate unique human readable filename using event metadata
-	filename := fmt.Sprintf("%s_%s_%s_%s_%s.mp4",
-		time.Unix(int64(evt.StartTime), 0).Format(time.RFC3339),
-		severity,
-		evt.Label,
-		joinStringSlice(evt.Zones, "_", false),
-		eventId,
-	)
-
-	url = fmt.Sprintf("%s/api/events/%s/clip.mp4", l.Config.Frigate.URL, eventId)
-
-	resp, err = client.Get(url)
-	if err != nil {
-		return fmt.Errorf("failed to download event: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download event: received status code %d", resp.StatusCode)
-	}
-
-	// Create the file and write the response body to it
-	file, err := os.Create(fmt.Sprintf("%s/%s", l.Config.Frigate.CachePath, filename))
-	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
-	}
-	defer file.Close()
-
-	_, err = io.Copy(file, resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to write to file: %w", err)
-	}
-
-	return nil
-}
-
-// GET request to obtain the associated thumbnail image of a frigate eventID
-func (l *listener) attachmentBase64(eventId string) (string, error) {
-	method := "GET"
-	url := fmt.Sprintf("%s/api/events/%s/thumbnail.jpg", l.Config.Frigate.URL, eventId)
-	client := &http.Client{
-		Timeout: time.Duration(l.Config.Timeout) * time.Millisecond,
-	}
-
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("failed to fetch image: status code %d", resp.StatusCode)
-	}
-
-	// Read the image data from the response body
-	imageData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	// Encode the image data to base64
-	base64Image := base64.StdEncoding.EncodeToString(imageData)
-
-	logging.NginxLog(logging.Info, method, url, req, resp)
-	return base64Image, nil
-}
-
-// Generates a pushover alert request from a MQTT review message.
-func (l *listener) createAlertRequest(review *review) alert.Request {
-	// Create a message based on event details
-	message := fmt.Sprintf("%s detected at %s",
-		joinStringSlice(review.After.Data.Objects, " and ", true),
-		joinStringSlice(review.After.Data.Zones, " and ", true))
-	// Obtain the event ID with the latest timestamp in the review
-	eventIds := review.After.Data.Detections
-	sort.Sort(sort.Reverse(sort.StringSlice(eventIds)))
-	// Obtain associated thumbnail of the latest event ID based on timestamp
-	attachmentBase64, _ := l.attachmentBase64(eventIds[0])
-	attachmentType := ""
-	if attachmentBase64 != "" {
-		attachmentType = "image/jpeg"
-	}
-	return alert.Request{
-		Message:          message,
-		Title:            "Frigate",
-		Priority:         toJsonNumber(l.Config.Alert.Priority),
-		Token:            l.Config.Alert.Token,
-		User:             l.Config.Alert.User,
-		URL:              l.Config.Frigate.ExternalUrl,
-		URLTitle:         "Open Frigate",
-		AttachmentBase64: attachmentBase64,
-		AttachmentType:   attachmentType,
-	}
-}
-
-// sendAlert sends a pushover alert based on the provided request.
-func (l *listener) sendAlert(request alert.Request) (*rawResponse, int, error) {
+// post sends a POST request to the specified URL with the given name and request body.
+// @param baseUrl The base URL to send the request to.
+// @param name The endpoint name to append to the base URL.
+// @param request The request body as a map of strings.
+// @return A pointer to the response body, HTTP status code, and error if any.
+func (l *listener) post(url string, request map[string]string) (*[]byte, int, error) {
 	method := "POST"
 	client := &http.Client{
 		Timeout: time.Duration(l.Config.Timeout) * time.Millisecond,
@@ -527,7 +359,7 @@ func (l *listener) sendAlert(request alert.Request) (*rawResponse, int, error) {
 		return nil, 0, err
 	}
 
-	req, err := http.NewRequest(method, l.Config.Alert.URL, bytes.NewReader(requestBytes))
+	req, err := http.NewRequest(method, url, bytes.NewReader(requestBytes))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -544,12 +376,88 @@ func (l *listener) sendAlert(request alert.Request) (*rawResponse, int, error) {
 	if err != nil {
 		return nil, resp.StatusCode, err
 	}
+	return &body, resp.StatusCode, nil
+}
 
-	rawResponse := rawResponse{}
-	if err := json.Unmarshal(body, &rawResponse); err != nil {
-		return nil, resp.StatusCode, err
+// sendAlert sends a pushover alert based on the provided request.
+// @param name The BTHome device name.
+// @return A pointer to btHomeResponse, HTTP status code, and error if any.
+func (l *listener) getBTHomeTemperature(name string) (*btHomeResponse, int, error) {
+	body, httpStatus, err := l.post(fmt.Sprintf("%s/%s", l.Config.BTHome.URL, name), map[string]string{"code": "status"})
+	if err != nil || httpStatus != 200 {
+		return nil, httpStatus, err
 	}
 
-	logging.NginxLog(logging.Info, method, l.Config.Alert.URL, req, resp)
-	return &rawResponse, resp.StatusCode, nil
+	rawResponse := btHomeResponse{}
+	if err := json.Unmarshal(*body, &rawResponse); err != nil {
+		return nil, httpStatus, err
+	}
+
+	return &rawResponse, httpStatus, nil
+}
+
+// getEachRadiatorStatus retrieves the status of all radiators.
+// @return A pointer to radiatorResponse, HTTP status code, and error if any.
+func (l *listener) getEachRadiatorStatus() (*radiatorResponse, int, error) {
+	// Build comma-separated list of radiator IDs
+	radiatorKeys := []string{}
+	for key := range l.Base.RadiatorMap {
+		radiatorKeys = append(radiatorKeys, key)
+	}
+	hosts := strings.Join(radiatorKeys, ",")
+
+	body, httpStatus, err := l.post(l.Config.Radiator.URL, map[string]string{"hosts": hosts, "code": "status"})
+	if err != nil || httpStatus != 200 {
+		return nil, httpStatus, err
+	}
+
+	rawResponse := radiatorResponse{}
+	if err := json.Unmarshal(*body, &rawResponse); err != nil {
+		return nil, httpStatus, err
+	}
+
+	return &rawResponse, httpStatus, nil
+}
+
+// getRadiatorAdjust retrieves the radiator adjustment for a given ID.
+// @param id The radiator ID.
+// @return A pointer to adjustGetResponse, HTTP status code, and error if any.
+func (l *listener) getRadiatorAdjust(id string) (*radiatorResponse, int, error) {
+	body, httpStatus, err := l.post(fmt.Sprintf("%s/%s", l.Config.Radiator.URL, id), map[string]string{"code": "adjust"})
+	if err != nil || httpStatus != 200 {
+		return nil, httpStatus, err
+	}
+
+	rawResponse := radiatorResponse{}
+	if err := json.Unmarshal(*body, &rawResponse); err != nil {
+		return nil, httpStatus, err
+	}
+
+	return &rawResponse, httpStatus, nil
+}
+
+// setRadiatorAdjust sets the radiator adjustment for a given ID and value.
+// @param id The radiator ID.
+// @param value The adjustment value to set.
+// @return HTTP status code, and error if any.
+func (l *listener) setRadiatorAdjust(id string, value int64) (int, error) {
+	_, httpStatus, err := l.post(fmt.Sprintf("%s/%s", l.Config.Radiator.URL, id), map[string]string{"code": "adjust", "value": fmt.Sprintf("%d", value)})
+	if err != nil || httpStatus != 200 {
+		return httpStatus, err
+	}
+
+	return httpStatus, nil
+}
+
+// setThermostatHeat sets the thermostat heat temperature for a given ID and value.
+// @param id The radiator ID.
+// @param value The adjustment value to set.
+// @return HTTP status code, and error if any.
+func (l *listener) setThermostatHeat(value int64) (int, error) {
+	_, httpStatus, err := l.post(l.Config.Thermostat.URL, map[string]string{"code": "heatTemp", "value": fmt.Sprintf("%d", value)})
+	if err != nil || httpStatus != 200 {
+		return httpStatus, err
+	}
+
+	return httpStatus, nil
 }
