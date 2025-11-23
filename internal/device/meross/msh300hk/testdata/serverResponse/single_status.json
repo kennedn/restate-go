@@ -1,1 +1,47 @@
-{"payload":{"all":[{"id":"dev1","scheduleBMode":0,"online":{"status":1,"lastActiveTime":0},"togglex":{"onoff":1},"timeSync":{"state":0},"mode":{"state":2},"temperature":{"room":200,"currentSet":220,"heating":1,"openWindow":0}}],"battery":[{"id":"dev1","value":95}]}}
+{
+    "payload": {
+        "all": [
+            {
+                "id": "dev1",
+                "scheduleBMode": 0,
+                "online": {
+                    "status": 1,
+                    "lastActiveTime": 0
+                },
+                "togglex": {
+                    "onoff": 1
+                },
+                "timeSync": {
+                    "state": 0
+                },
+                "mode": {
+                    "state": 3
+                },
+                "temperature": {
+                    "room": 200,
+                    "currentSet": 220,
+                    "heating": 1,
+                    "openWindow": 0
+                }
+            }
+        ],
+        "battery": [
+            {
+                "id": "dev1",
+                "value": 95
+            }
+        ],
+        "mode": [
+            {
+                "id": "dev1",
+                "state": 3
+            }
+        ],
+        "adjust": [
+            {
+                "id": "dev1",
+                "temperature": 70
+            }
+        ]
+    }
+}

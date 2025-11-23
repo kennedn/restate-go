@@ -14,6 +14,13 @@ endpoints:
   maxValue: 4
   namespace: Appliance.Control.Thermostat.Mode
   template: '{"mode":[{"channel":0,"mode":%s}]}'
+- code: heatTemp
+  supportedDevices: 
+  - thermostat
+  minValue: 50
+  maxValue: 350
+  namespace: Appliance.Control.Thermostat.Mode
+  template: '{"mode":[{"channel":0,"heatTemp":%s}]}'
 - code: status
   supportedDevices: 
   - thermostat

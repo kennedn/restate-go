@@ -66,10 +66,10 @@ func setupThermostatServer(t *testing.T) *httptest.Server {
 		w.WriteHeader(http.StatusOK)
 
 		if payload.Header.Method == "GET" {
-			if bytes.Count(body, []byte("payload")) > 1 {
-				w.Write([]byte(multiThermostatResponse))
-				return
-			}
+			// if bytes.Count(body, []byte("payload")) > 1 {
+			// 	w.Write([]byte(multiThermostatResponse))
+			// 	return
+			// }
 			w.Write([]byte(singleThermostatResponse))
 			return
 		}
@@ -194,6 +194,30 @@ func TestHandlers(t *testing.T) {
 		{
 			name:         "toggle_single_success",
 			method:       http.MethodPost,
+			url:          "/meross/thermo1?code=toggle",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK"}`,
+		},
+		{
+			name:         "mode_single_success",
+			method:       http.MethodPost,
+			url:          "/meross/thermo1?code=mode",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK","data":{"mode":2}}`,
+		},
+		{
+			name:         "mode_set_single_success",
+			method:       http.MethodPost,
+			url:          "/meross/thermo1?code=mode&value=2",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK"}`,
+		},
+		{
+			name:         "toggle_single_with_value_success",
+			method:       http.MethodPost,
 			url:          "/meross/thermo1?code=toggle&value=1",
 			data:         nil,
 			expectedCode: http.StatusOK,
@@ -214,6 +238,14 @@ func TestHandlers(t *testing.T) {
 			data:         nil,
 			expectedCode: http.StatusOK,
 			expectedBody: `{"message":"OK","data":{"onoff":1,"mode":2,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}}`,
+		},
+		{
+			name:         "bad_json_request",
+			method:       http.MethodPost,
+			url:          "/meross/thermo1?code=mode",
+			data:         []byte(`"bad": "json"}`),
+			expectedCode: http.StatusBadRequest,
+			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
 		},
 	}
 
