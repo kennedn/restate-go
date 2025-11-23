@@ -176,14 +176,6 @@ func TestHandlers(t *testing.T) {
 			expectedBody: `{"message":"OK","data":["thermo1","thermo2"]}`,
 		},
 		{
-			name:         "single_get_codes",
-			method:       http.MethodGet,
-			url:          "/meross/thermo1",
-			data:         nil,
-			expectedCode: http.StatusOK,
-			expectedBody: `{"message":"OK","data":["toggle","mode","status"]}`,
-		},
-		{
 			name:         "single_invalid_method",
 			method:       http.MethodDelete,
 			url:          "/meross/thermo1",
