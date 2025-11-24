@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -65,8 +66,7 @@ type listener struct {
 type listenerConfig struct {
 	Name    string `yaml:"name"`
 	Client  mqtt.Client
-	Timeout uint   `yaml:"timeoutMs"`
-	HubUUID string `yaml:"hubUUID"`
+	Timeout uint `yaml:"timeoutMs"`
 	MQTT    struct {
 		Host string `yaml:"host"`
 		Port int    `yaml:"port"`
@@ -75,10 +75,13 @@ type listenerConfig struct {
 		URL string `yaml:"url"`
 	} `yaml:"bthome"`
 	Radiator struct {
-		URL string `yaml:"url"`
+		URL  string `yaml:"url"`
+		UUID string `yaml:"uuid"`
 	} `yaml:"radiator"`
 	Thermostat struct {
-		URL string `yaml:"url"`
+		URL          string `yaml:"url"`
+		UUID         string `yaml:"uuid"`
+		SyncInterval uint   `yaml:"syncIntervalMs"`
 	} `yaml:"thermostat"`
 }
 
@@ -161,9 +164,13 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		}
 
 		// Check for missing parameters in the listenerConfig
-		if listenerConfig.Name == "" || listenerConfig.Timeout == 0 || listenerConfig.HubUUID == "" || listenerConfig.MQTT.Host == "" {
+		if listenerConfig.Name == "" || listenerConfig.Timeout == 0 || listenerConfig.Radiator.UUID == "" || listenerConfig.Thermostat.UUID == "" || listenerConfig.MQTT.Host == "" {
 			logging.Log(logging.Info, "Unable to load device due to missing parameters")
 			continue
+		}
+
+		if listenerConfig.Thermostat.SyncInterval == 0 {
+			listenerConfig.Thermostat.SyncInterval = 90000 // 1.5 minutes default
 		}
 
 		// Set default values for optional parameters
@@ -175,7 +182,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		if client == nil {
 			clientOpts := mqtt.NewClientOptions()
 			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
-			clientOpts.SetClientID("thermostat-restate-go")
+			clientOpts.SetClientID("thermostat-restate-go-test")
 			clientOpts.SetOnConnectHandler(listener.connectionCallback)
 			clientOpts.SetConnectionLostHandler(listener.connectionLostCallback)
 			client = mqtt.NewClient(clientOpts)
@@ -194,6 +201,9 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		// Set the listenerConfig in the listener
 		listener.Config = &listenerConfig
 
+		// Start the thermostat reconcile loop
+		listener.startThermostatSyncLoop()
+
 		// Append the listener to the base object and the listeners slice
 		base.Listeners = append(base.Listeners, &listener)
 		listeners = append(listeners, listener)
@@ -209,13 +219,21 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 	return &base, listeners, nil
 }
 
+// connectionCallback subscribes to the necessary MQTT topics upon connection.
 func (l *listener) connectionCallback(client mqtt.Client) {
 	logging.Log(logging.Info, "MQTT connected")
-	token := client.Subscribe(fmt.Sprintf("/appliance/%s/publish", l.Config.HubUUID), 0, l.subscriptionCallback)
-	if err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond); err != nil {
-		logging.Log(logging.Error, "Failed to subscribe to MQTT topic: %v", token.Error())
-	} else {
-		logging.Log(logging.Info, "Successfully subscribed to MQTT topic")
+
+	UUIDs := []string{l.Config.Thermostat.UUID, l.Config.Radiator.UUID}
+
+	for _, UUID := range UUIDs {
+		topic := fmt.Sprintf("/appliance/%s/publish", UUID)
+		token := client.Subscribe(topic, 0, l.subscriptionCallback)
+		err := mqtt.WaitTokenTimeout(token, time.Duration(l.Config.Timeout)*time.Millisecond)
+		if err != nil {
+			logging.Log(logging.Error, "Failed to subscribe to %s: %v", topic, token.Error())
+			continue
+		}
+		logging.Log(logging.Info, "Successfully subscribed to %s", topic)
 	}
 }
 
@@ -223,8 +241,17 @@ func (l *listener) connectionLostCallback(_ mqtt.Client, err error) {
 	logging.Log(logging.Info, "MQTT connection lost: %v", err)
 }
 
-var radiatorLastProcessed = make(map[string]time.Time)
-var settleTime = 5 * time.Minute
+// startThermostatSyncLoop starts a loop that periodically synchronizes the thermostat state with the TRVs.
+func (l *listener) startThermostatSyncLoop() {
+	interval := time.Duration(l.Config.Thermostat.SyncInterval) * time.Millisecond
+	ticker := time.NewTicker(interval)
+
+	go func() {
+		for range ticker.C {
+			l.thermostatSync()
+		}
+	}()
+}
 
 // subscriptionCallback is called when a message is received on the subscribed MQTT topic.
 func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
@@ -240,38 +267,40 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 		radiatorStatus = &status.Payload.Temperature[0]
 	}
 
-	// Always perform boiler sync on currentSet updates
-	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" && radiatorStatus != nil && radiatorStatus.CurrentSet != 0 {
-		l.boilerSync()
-		return
+	// Perform thermostat sync if the message originates from thermostat or TRV
+	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" || status.Header.Namespace == "Appliance.Control.Thermostat.Mode" {
+		l.thermostatSync()
 	}
 
-	// Only process messages with the correct namespace and room data
+	// Only proceed with btHomeSync if message originates from TRV and has room data
 	if status.Header.Namespace != "Appliance.Hub.Mts100.Temperature" || radiatorStatus == nil || radiatorStatus.Id == "" || radiatorStatus.Room == 0 {
-		// logging.Log(logging.Info, "Ignored MQTT message with namespace %s and body %s", status.Header.Namespace, string(message.Payload()))
 		return
 	}
 
-	// Sanity check: Skip if already processed within the last 5 minutes
-	if lastProcessed, ok := radiatorLastProcessed[radiatorStatus.Id]; ok && time.Since(lastProcessed) < settleTime {
-		logging.Log(logging.Info, "Skipping processing for id %s as it was processed recently", radiatorStatus.Id)
-		return
-	}
-
-	l.boilerSync()
 	l.btHomeSyncTemperature(radiatorStatus)
-
-	// Update last processed time
-	radiatorLastProcessed[radiatorStatus.Id] = time.Now()
 }
+
+// Paho can trigger writes to this map concurrently, so we need to use a concurrent map implementation, e.g sync.Map
+var radiatorLastProcessed sync.Map
+var settleTime = 1 * time.Minute
 
 // btHomeSyncTemperature uses external BTHome temperature sensors to make adjustments to the onboard Meross TRV temperature reading
 // @param message The MQTT message containing the thermostat status
 func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
+
+	// Lookup BTHome name from radiator ID
 	btHomeName, ok := l.Base.RadiatorMap[radiatorStatus.Id]
 	if !ok {
 		logging.Log(logging.Info, "Unable to find device with id %s in radiator map", radiatorStatus.Id)
 		return
+	}
+
+	// Skip if we already processed recently
+	if rawValue, ok := radiatorLastProcessed.Load(radiatorStatus.Id); ok {
+		if lastProcessed, ok := rawValue.(time.Time); ok && time.Since(lastProcessed) < settleTime {
+			logging.Log(logging.Info, "Skipping TRV with name %s (id: %s) as it was processed recently", btHomeName, radiatorStatus.Id)
+			return
+		}
 	}
 
 	// Get BTHome response
@@ -321,10 +350,13 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 		return
 	}
 	logging.Log(logging.Info, "Synced TRV with name %s (id: %s, bthome_temp: %d, radiator_temp: %d, delta: %d)", btHomeName, radiatorStatus.Id, btHomeTemperatureInt, correctedTemperature, delta/10)
+
+	// Update last processed time
+	radiatorLastProcessed.Store(radiatorStatus.Id, time.Now())
 }
 
-// boilerSync checks if any TRVs are requesting heat and toggles the boiler state accordingly
-func (l *listener) boilerSync() {
+// thermostatSync checks if any TRVs are requesting heat and toggles the thermostat state accordingly
+func (l *listener) thermostatSync() {
 	radiatorStatus, httpStatus, err := l.getEachRadiatorStatus()
 	if err != nil || httpStatus != 200 {
 		logging.Log(logging.Error, "Failed to get radiator status: %v (HTTP status: %d)", err, httpStatus)
@@ -345,13 +377,13 @@ func (l *listener) boilerSync() {
 	}
 
 	if !heating {
-		// Toggle boiler to OFF state
+		// Toggle thermostat to OFF state
 		l.setThermostatHeat(50) // Set to 5.0 degrees to effectively turn off heating
 		logging.Log(logging.Info, "No TRVs are requesting heat")
 		return
 	}
 
-	// Toggle boiler to ON state
+	// Toggle thermostat to ON state
 	l.setThermostatHeat(350) // Set to 35.0 degrees to effectively turn on heating
 	logging.Log(logging.Info, "At least one TRV requests heat")
 }
