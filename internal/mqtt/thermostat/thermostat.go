@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -170,7 +172,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		}
 
 		if listenerConfig.Thermostat.SyncInterval == 0 {
-			listenerConfig.Thermostat.SyncInterval = 90000 // 1.5 minutes default
+			listenerConfig.Thermostat.SyncInterval = 15 * 60 * 1000 // 15 minutes default
 		}
 
 		// Set default values for optional parameters
@@ -182,7 +184,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		if client == nil {
 			clientOpts := mqtt.NewClientOptions()
 			clientOpts.AddBroker(fmt.Sprintf("tcp://%s:%d", listenerConfig.MQTT.Host, listenerConfig.MQTT.Port))
-			clientOpts.SetClientID("thermostat-restate-go-test")
+			clientOpts.SetClientID("thermostat-restate-go")
 			clientOpts.SetOnConnectHandler(listener.connectionCallback)
 			clientOpts.SetConnectionLostHandler(listener.connectionLostCallback)
 			client = mqtt.NewClient(clientOpts)
@@ -202,7 +204,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		listener.Config = &listenerConfig
 
 		// Start the thermostat reconcile loop
-		listener.startThermostatSyncLoop()
+		listener.startThermostatSyncStalenessCheck()
 
 		// Append the listener to the base object and the listeners slice
 		base.Listeners = append(base.Listeners, &listener)
@@ -241,14 +243,25 @@ func (l *listener) connectionLostCallback(_ mqtt.Client, err error) {
 	logging.Log(logging.Info, "MQTT connection lost: %v", err)
 }
 
-// startThermostatSyncLoop starts a loop that periodically synchronizes the thermostat state with the TRVs.
-func (l *listener) startThermostatSyncLoop() {
-	interval := time.Duration(l.Config.Thermostat.SyncInterval) * time.Millisecond
-	ticker := time.NewTicker(interval)
+// lastThermostatSyncFromMQTT stores the last time thermostatSync was triggered by MQTT.
+// 0 means "never".
+var lastThermostatSyncFromMQTT atomic.Int64
 
+// startThermostatSyncStalenessCheck starts a loop that periodically synchronizes the thermostat state with the TRVs,
+// but only if MQTT-triggered sync has not happened within SyncInterval.
+func (l *listener) startThermostatSyncStalenessCheck() {
+	interval := 60 * time.Second
+	ticker := time.NewTicker(interval)
 	go func() {
 		for range ticker.C {
-			l.thermostatSync()
+			last := lastThermostatSyncFromMQTT.Load()
+			lastTime := time.Unix(0, last)
+			staleAfter := time.Duration(l.Config.Thermostat.SyncInterval) * time.Millisecond
+
+			if time.Since(lastTime) >= staleAfter {
+				logging.Log(logging.Info, "thermostatSync has gone stale after %s, syncing now", staleAfter)
+				l.thermostatSync()
+			}
 		}
 	}()
 }
@@ -267,7 +280,8 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 		radiatorStatus = &status.Payload.Temperature[0]
 	}
 
-	// Perform thermostat sync if the message originates from thermostat or TRV
+	// Perform thermostat sync if the message originates from thermostat or TRV,
+	// and record that MQTT was the trigger.
 	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" || status.Header.Namespace == "Appliance.Control.Thermostat.Mode" {
 		l.thermostatSync()
 	}
@@ -296,8 +310,8 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 	}
 
 	// Skip if we already processed recently
-	if rawValue, ok := radiatorLastProcessed.Load(radiatorStatus.Id); ok {
-		if lastProcessed, ok := rawValue.(time.Time); ok && time.Since(lastProcessed) < settleTime {
+	if lastProcessedRaw, ok := radiatorLastProcessed.Load(radiatorStatus.Id); ok {
+		if lastProcessed, ok := lastProcessedRaw.(time.Time); ok && time.Since(lastProcessed) < settleTime {
 			logging.Log(logging.Info, "Skipping TRV with name %s (id: %s) as it was processed recently", btHomeName, radiatorStatus.Id)
 			return
 		}
@@ -309,14 +323,17 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 		logging.Log(logging.Error, "Failed to get BTHome temperature for %s: %v (HTTP status: %d)", btHomeName, err, httpStatus)
 		return
 	}
+
 	// Parse BTHome temperature
 	btHomeTemperature, err := btHomeResponse.Data.Temperature.Float64()
 	if err != nil {
 		logging.Log(logging.Error, "Failed to parse BTHome temperature for %s: %v", btHomeName, err)
 		return
 	}
-	// Convert BTHome temperature to meross integer format
-	btHomeTemperatureInt := int64(btHomeTemperature * 10)
+
+	// Round temperature to nearest 0.5°C, then convert to Meross "tenths" integer format
+	btHomeTemperatureRounded := math.Round(btHomeTemperature*2.0) / 2.0
+	btHomeTemperatureInt := int64(btHomeTemperatureRounded * 10.0)
 
 	// Get radiator adjust response
 	adjustResponse, httpStatus, err := l.getRadiatorAdjust(radiatorStatus.Id)
@@ -324,6 +341,7 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 		logging.Log(logging.Error, "Failed to get radiator adjust for %s: %v (HTTP status: %d)", btHomeName, err, httpStatus)
 		return
 	}
+
 	// Parse radiator adjust value
 	adjustDelta, err := adjustResponse.Data[0].Value.Int64()
 	if err != nil {
@@ -349,7 +367,8 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 		logging.Log(logging.Error, "Failed to set radiator adjust for %s: %v (HTTP status: %d)", btHomeName, err, httpStatus)
 		return
 	}
-	logging.Log(logging.Info, "Synced TRV with name %s (id: %s, bthome_temp: %d, radiator_temp: %d, delta: %d)", btHomeName, radiatorStatus.Id, btHomeTemperatureInt, correctedTemperature, delta/10)
+
+	logging.Log(logging.Info, "Synced TRV with name %s (id: %s, old_temp: %d, new_temp: %d, delta: %d)", btHomeName, radiatorStatus.Id, radiatorStatus.Room, btHomeTemperatureInt, delta/10)
 
 	// Update last processed time
 	radiatorLastProcessed.Store(radiatorStatus.Id, time.Now())
@@ -368,24 +387,26 @@ func (l *listener) thermostatSync() {
 		return
 	}
 
-	heating := false
+	// Set heat to min / max based on any TRV heating requests
+	var heat int64 = 50
 	for _, d := range radiatorStatus.Data {
 		if d.Status.Temperature.Heating {
-			heating = true
+			heat = 350
 			break
 		}
 	}
 
-	if !heating {
-		// Toggle thermostat to OFF state
-		l.setThermostatHeat(50) // Set to 5.0 degrees to effectively turn off heating
-		logging.Log(logging.Info, "No TRVs are requesting heat")
+	// Set thermostat temperature
+	httpStatus, err = l.setThermostatHeat(heat)
+	if err != nil || httpStatus != 200 {
+		logging.Log(logging.Error, "Failed to set thermostat heat: %v (HTTP status: %d)", err, httpStatus)
 		return
 	}
 
-	// Toggle thermostat to ON state
-	l.setThermostatHeat(350) // Set to 35.0 degrees to effectively turn on heating
-	logging.Log(logging.Info, "At least one TRV requests heat")
+	logging.Log(logging.Info, "Set thermostat heat to %d", heat)
+
+	// Update time of last successful sync
+	lastThermostatSyncFromMQTT.Store(time.Now().UnixNano())
 }
 
 // post sends a POST request to the specified URL with the given name and request body.
