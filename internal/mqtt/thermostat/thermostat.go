@@ -225,7 +225,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 func (l *listener) connectionCallback(client mqtt.Client) {
 	logging.Log(logging.Info, "MQTT connected")
 
-	UUIDs := []string{l.Config.Thermostat.UUID, l.Config.Radiator.UUID}
+	UUIDs := []string{l.Config.Radiator.UUID}
 
 	for _, UUID := range UUIDs {
 		topic := fmt.Sprintf("/appliance/%s/publish", UUID)
@@ -280,18 +280,17 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 		radiatorStatus = &status.Payload.Temperature[0]
 	}
 
-	// Perform thermostat sync if the message originates from thermostat or TRV,
+	// Perform thermostat sync if the message originates from TRV,
 	// and record that MQTT was the trigger.
-	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" || status.Header.Namespace == "Appliance.Control.Thermostat.Mode" {
+	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" {
 		l.thermostatSync()
 	}
 
 	// Only proceed with btHomeSync if message originates from TRV and has room data
 	if status.Header.Namespace != "Appliance.Hub.Mts100.Temperature" || radiatorStatus == nil || radiatorStatus.Id == "" || radiatorStatus.Room == 0 {
+		l.btHomeSyncTemperature(radiatorStatus)
 		return
 	}
-
-	l.btHomeSyncTemperature(radiatorStatus)
 }
 
 // Paho can trigger writes to this map concurrently, so we need to use a concurrent map implementation, e.g sync.Map
