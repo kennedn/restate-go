@@ -225,7 +225,7 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 func (l *listener) connectionCallback(client mqtt.Client) {
 	logging.Log(logging.Info, "MQTT connected")
 
-	UUIDs := []string{l.Config.Radiator.UUID}
+	UUIDs := []string{l.Config.Radiator.UUID, l.Config.Thermostat.UUID}
 
 	for _, UUID := range UUIDs {
 		topic := fmt.Sprintf("/appliance/%s/publish", UUID)
@@ -259,7 +259,11 @@ func (l *listener) startThermostatSyncStalenessCheck() {
 			staleAfter := time.Duration(l.Config.Thermostat.SyncInterval) * time.Millisecond
 
 			if time.Since(lastTime) >= staleAfter {
-				logging.Log(logging.Info, "thermostatSync has gone stale after %s, syncing now", staleAfter)
+				if last == 0 {
+					logging.Log(logging.Info, "thermostatSync has never run, syncing now")
+				} else {
+					logging.Log(logging.Info, "thermostatSync has gone stale after %s, syncing now", staleAfter)
+				}
 				l.thermostatSync()
 			}
 		}
@@ -282,15 +286,16 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 
 	// Perform thermostat sync if the message originates from TRV,
 	// and record that MQTT was the trigger.
-	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" {
+	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" || status.Header.Namespace == "Appliance.Control.Thermostat.Mode" {
 		l.thermostatSync()
 	}
 
 	// Only proceed with btHomeSync if message originates from TRV and has room data
 	if status.Header.Namespace != "Appliance.Hub.Mts100.Temperature" || radiatorStatus == nil || radiatorStatus.Id == "" || radiatorStatus.Room == 0 {
-		l.btHomeSyncTemperature(radiatorStatus)
 		return
 	}
+
+	l.btHomeSyncTemperature(radiatorStatus)
 }
 
 // Paho can trigger writes to this map concurrently, so we need to use a concurrent map implementation, e.g sync.Map
@@ -330,10 +335,6 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 		return
 	}
 
-	// Round temperature to nearest 0.5°C, then convert to Meross "tenths" integer format
-	btHomeTemperatureRounded := math.Round(btHomeTemperature*2.0) / 2.0
-	btHomeTemperatureInt := int64(btHomeTemperatureRounded * 10.0)
-
 	// Get radiator adjust response
 	adjustResponse, httpStatus, err := l.getRadiatorAdjust(radiatorStatus.Id)
 	if err != nil || httpStatus != 200 || len(adjustResponse.Data) == 0 {
@@ -348,13 +349,19 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 		return
 	}
 
-	// Meross does not expose a pre-adjusted temperature, so we need to calculate it manually with the adjust delta
+	// Meross does not expose a pre-adjusted temperature, so we need to recover it by applying the adjust delta
+	// adjust is in 100ths and raditaorStatus.Room is in 10ths and to the nearest 0.5, so the best resolution we can get is 0.5 degrees
+	// Divide adjustDelta by 10 to convert to 10ths, then subtract from room temperature
 	correctedTemperature := radiatorStatus.Room - (adjustDelta / 10)
 
 	// Calculate new adjust delta
-	delta := (btHomeTemperatureInt - correctedTemperature) * 10
+	// Convert from 10ths to floating point representation of temperature
+	correctedTemperatureFloat := float64(correctedTemperature) / 10
+	// Calculate delta betweeen BTHome temperature and corrected TRV temperature, rounding to nearest 0.5 degrees and converting to 100ths
+	deltaFloat := (btHomeTemperature - correctedTemperatureFloat) / 0.5
+	delta := int64(math.Round(deltaFloat) * 0.5 * 100)
 
-	// Sanity check delta, meross allows +/- 500 max
+	// Sanity check delta, meross allows +/- 500 max (5 degrees)
 	if max(delta, -delta) > 500 {
 		logging.Log(logging.Info, "Delta(%d) exceeds +/- 500 and won't be accepted by TRV, not applying", delta)
 		return
@@ -367,7 +374,7 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 		return
 	}
 
-	logging.Log(logging.Info, "Synced TRV with name %s (id: %s, old_temp: %d, new_temp: %d, delta: %d)", btHomeName, radiatorStatus.Id, radiatorStatus.Room, btHomeTemperatureInt, delta/10)
+	logging.Log(logging.Info, "Synced TRV with name %s (id: %s, old_temp: %.2f, new_temp: %.2f, delta: %d)", btHomeName, radiatorStatus.Id, correctedTemperatureFloat, btHomeTemperature, delta)
 
 	// Update last processed time
 	radiatorLastProcessed.Store(radiatorStatus.Id, time.Now())
