@@ -13,7 +13,7 @@
             "console": "internalConsole",
             "env": {
                 "PATH": "$PATH:/usr/local/go/bin",
-                "RESTATECONFIG": "/home/kennedn/Projects/restate-go/config/config2.yaml"
+                "RESTATECONFIG": "/home/kennedn/Projects/restate-go/config/config.yaml"
             },
             // "asRoot": true
         },

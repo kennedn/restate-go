@@ -1,11 +1,11 @@
 package wol
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/kennedn/restate-go/internal/common/config"
@@ -14,8 +14,6 @@ import (
 	router "github.com/kennedn/restate-go/internal/router/common"
 
 	"github.com/gorilla/schema"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,12 +41,7 @@ func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
 func routes(config *config.Config) (*base, []router.Route, error) {
 	routes := []router.Route{}
 
-	base := base{
-		udpAddr: &net.UDPAddr{
-			IP:   net.ParseIP("192.168.1.255"),
-			Port: 9,
-		},
-	}
+	base := base{}
 
 	for _, d := range config.Devices {
 		if d.Type != "wol" {
@@ -125,7 +118,6 @@ func (b *base) handler(writer http.ResponseWriter, r *http.Request) {
 	}
 
 	httpCode, jsonResponse = device.SetJSONResponse(http.StatusMethodNotAllowed, "Method Not Allowed", nil)
-	return
 }
 
 func (w *wol) wakeOnLan() error {
@@ -147,7 +139,7 @@ func (w *wol) wakeOnLan() error {
 	}
 
 	if len(macAddress) != 6 {
-		return errors.New("Invalid hardware address")
+		return errors.New("invalid hardware address")
 	}
 
 	// 6 * 0xff (6 bytes) + 6 * macAddress (96 bytes) = 102
@@ -164,10 +156,12 @@ func (w *wol) wakeOnLan() error {
 	}
 
 	conn.SetDeadline(time.Now().Add(time.Duration(w.Timeout) * time.Millisecond))
-	_, err = conn.WriteTo(payload, w.base.udpAddr)
+	_, err = conn.WriteTo(payload, &net.UDPAddr{
+		IP:   net.ParseIP("192.168.1.255"),
+		Port: 9,
+	})
 	return err
 }
-
 func (w *wol) ping() error {
 	var conn net.PacketConn
 	var err error
@@ -175,44 +169,45 @@ func (w *wol) ping() error {
 	if w.conn != nil {
 		conn = w.conn
 	} else {
-		conn, err = icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+		conn, err = net.ListenPacket("udp", ":0")
 		if err != nil {
 			return err
 		}
+		defer conn.Close()
 	}
-	defer func() {
-		conn.Close()
-	}()
 
-	ipAddr, err := net.ResolveIPAddr("ip4", w.Host)
+	macAddress, err := net.ParseMAC(w.MacAddress)
 	if err != nil {
 		return err
 	}
-
-	msg := icmp.Message{
-		Type: ipv4.ICMPTypeEcho,
-		Code: 0,
-		Body: &icmp.Echo{
-			ID:  os.Getpid() & 0xffff,
-			Seq: 1,
-		},
+	if len(macAddress) != 6 {
+		return errors.New("invalid hardware address")
 	}
 
-	msgBytes, err := msg.Marshal(nil)
-	if err != nil {
-		return err
-	}
+	payload := []byte("PING")
 
 	conn.SetDeadline(time.Now().Add(time.Duration(w.Timeout) * time.Millisecond))
-	_, err = conn.WriteTo(msgBytes, ipAddr)
+
+	_, err = conn.WriteTo(payload, &net.UDPAddr{
+		IP:   net.ParseIP(w.Host),
+		Port: 10,
+	})
 	if err != nil {
 		return err
 	}
 
-	response := make([]byte, 1500)
-	_, _, err = conn.ReadFrom(response)
+	// wait for reply
+	buf := make([]byte, 1500)
+	n, _, err := conn.ReadFrom(buf)
 	if err != nil {
 		return err
+	}
+
+	// ensure reply is "PONG"
+	reply := buf[:n]
+
+	if !bytes.Equal(reply, []byte("PONG")) {
+		return errors.New("unexpected reply")
 	}
 
 	return nil

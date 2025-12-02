@@ -1,28 +1,34 @@
-FROM scionproto/docker-caps as caps
+# --- Build stage ------------------------------------------------------------
+FROM golang:latest AS builder
 
-FROM golang:latest
-
-# Set the working directory to /app
 WORKDIR /app
 
-# Copy your Go source code into the container
-COPY . .
-
-# Build the Go program
+# Copy dependency files first to leverage layer caching
+COPY go.mod go.sum ./
 RUN go mod download
-RUN go build -o restate main.go
+
+# Now copy the rest of the source
+COPY . .
 
 # Run unit tests
 RUN go test ./...
 
-RUN chmod 775 /app/restate
-COPY --from=caps /bin/setcap /bin
-RUN setcap cap_net_raw=+ep /app/restate && rm /bin/setcap
+# Build a static Linux binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o /app/restate main.go
 
+# --- Final stage ------------------------------------------------------------
+FROM scratch
+
+WORKDIR /app
+
+# Copy the compiled binary from the builder stage
+COPY --from=builder /app/restate /app/restate
+
+# Default config path – overridden/populated by a ConfigMap volume in Kubernetes
 ENV RESTATECONFIG=/app/config.yaml
 
-RUN useradd -m restate
-USER restate
+# Run as non-root
+USER 1000:1000
 
-# Set the binary as the entrypoint
 ENTRYPOINT ["/app/restate"]

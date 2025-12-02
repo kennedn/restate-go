@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"os"
 	"sort"
 	"time"
 
@@ -13,10 +12,15 @@ import (
 	device "github.com/kennedn/restate-go/internal/device/common"
 	router "github.com/kennedn/restate-go/internal/router/common"
 
+	_ "embed"
+
 	"github.com/gorilla/schema"
 	"github.com/gorilla/websocket"
 	"gopkg.in/yaml.v3"
 )
+
+//go:embed device.yaml
+var defaultInternalConfig []byte
 
 type configuration struct {
 	Keys map[string]string `yaml:"keys"`
@@ -107,26 +111,22 @@ func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
 }
 
 func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
-	_, routes, err := routes(config, "")
+	_, routes, err := routes(config, nil)
 	return routes, err
 }
 
-func routes(config *config.Config, internalConfigPath string) (*base, []router.Route, error) {
+func routes(config *config.Config, internalConfigOverride *[]byte) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{}
 
-	if internalConfigPath == "" {
-		internalConfigPath = "./internal/device/tvcom/device.yaml"
-	}
-
-	internalConfigFile, err := os.ReadFile(internalConfigPath)
-	if err != nil {
-		return nil, []router.Route{}, err
+	internalConfig := defaultInternalConfig
+	if internalConfigOverride != nil {
+		internalConfig = *internalConfigOverride
 	}
 
 	configuration := []configuration{}
 
-	if err := yaml.Unmarshal(internalConfigFile, &configuration); err != nil {
+	if err := yaml.Unmarshal(internalConfig, &configuration); err != nil {
 		return nil, []router.Route{}, err
 	}
 

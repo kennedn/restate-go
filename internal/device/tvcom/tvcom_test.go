@@ -3,7 +3,6 @@ package tvcom
 import (
 	"bytes"
 	"errors"
-	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -134,7 +133,12 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
 				t.Fatalf("Could not read tvcom input")
 			}
-			base, _, err := routes(&tvcomConfig, "testdata/baseConfig/long_opcodes_device.yaml")
+			internalConfigFile, err := os.ReadFile("testdata/baseConfig/long_opcodes_device.yaml")
+			if err != nil {
+				t.Fatalf("Could not read internal config input")
+			}
+
+			base, _, err := routes(&tvcomConfig, &internalConfigFile)
 			if err != nil {
 				t.Fatalf("routes returned an error: %v", err)
 			}
@@ -192,13 +196,6 @@ func TestRoutes(t *testing.T) {
 			expectedError:      nil,
 		},
 		{
-			name:               "base_bad_path",
-			configPath:         "testdata/tvcomConfig/normal_config.yaml",
-			internalConfigPath: "non/existant/file",
-			routeCount:         0,
-			expectedError:      &fs.PathError{},
-		},
-		{
 			name:               "base_0_endpoints",
 			configPath:         "testdata/tvcomConfig/normal_config.yaml",
 			internalConfigPath: "testdata/baseConfig/0_opcodes_device.yaml",
@@ -211,13 +208,6 @@ func TestRoutes(t *testing.T) {
 			internalConfigPath: "testdata/baseConfig/non_yaml_config.yaml",
 			routeCount:         0,
 			expectedError:      &yaml.TypeError{},
-		},
-		{
-			name:               "base_empty_yaml_config",
-			configPath:         "testdata/tvcomConfig/normal_config.yaml",
-			internalConfigPath: "testdata/baseConfig/empty_yaml_config.yaml",
-			routeCount:         0,
-			expectedError:      &fs.PathError{},
 		},
 		{
 			name:               "tvcom_empty_yaml_config",
@@ -254,8 +244,12 @@ func TestRoutes(t *testing.T) {
 			if err := yaml.Unmarshal(tvcomConfigFile, &tvcomConfig); err != nil {
 				t.Fatalf("Could not read tvcom input")
 			}
+			internalConfigFile, err := os.ReadFile(tc.internalConfigPath)
+			if err != nil {
+				t.Fatalf("Could not read internal config input")
+			}
 
-			_, r, err := routes(&tvcomConfig, tc.internalConfigPath)
+			_, r, err := routes(&tvcomConfig, &internalConfigFile)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
@@ -401,7 +395,12 @@ func TestHandlers(t *testing.T) {
 				t.Fatalf("Could not read tvcom input")
 			}
 
-			base, routes, err := routes(&tvcomConfig, "device.yaml")
+			internalConfigFile, err := os.ReadFile("device.yaml")
+			if err != nil {
+				t.Fatalf("Could not read internal config input")
+			}
+
+			base, routes, err := routes(&tvcomConfig, &internalConfigFile)
 			if err != nil {
 				t.Fatalf("routes returned an error: %v", err)
 			}

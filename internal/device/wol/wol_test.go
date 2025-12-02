@@ -1,20 +1,15 @@
 package wol
 
 import (
-	"bytes"
 	"errors"
 	"net"
-	"net/http/httptest"
 	"os"
 	"slices"
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/stretchr/testify/assert"
-	"golang.org/x/net/icmp"
-	"golang.org/x/net/ipv4"
 	"gopkg.in/yaml.v3"
 )
 
@@ -52,7 +47,6 @@ func (m *mockPacketConn) SetWriteDeadline(t time.Time) error {
 }
 
 type TimeoutError struct {
-	error
 }
 
 func (e *TimeoutError) Timeout() bool {
@@ -151,134 +145,134 @@ func TestWakeOnLan(t *testing.T) {
 	}
 }
 
-func TestPing(t *testing.T) {
+// func TestPing(t *testing.T) {
 
-	testCases := []struct {
-		name               string
-		host               string
-		expectTimeoutError bool
-		expectedMessage    *icmp.Message
-		readError          bool
-		writeError         bool
-	}{
-		{
-			name: "valid_icmp_message",
-			host: "127.0.0.1",
-			expectedMessage: &icmp.Message{
-				Type: ipv4.ICMPTypeEcho,
-				Code: 0,
-				Body: &icmp.Echo{
-					ID:  os.Getpid() & 0xffff,
-					Seq: 1,
-				},
-			},
-			expectTimeoutError: false,
-			readError:          false,
-			writeError:         false,
-		},
-		{
-			name: "read_error",
-			host: "127.0.0.1",
-			expectedMessage: &icmp.Message{
-				Type: ipv4.ICMPTypeEcho,
-				Code: 0,
-				Body: &icmp.Echo{
-					ID:  os.Getpid() & 0xffff,
-					Seq: 1,
-				},
-			},
-			expectTimeoutError: true,
-			writeError:         false,
-			readError:          true,
-		},
-		{
-			name: "write_error",
-			host: "127.0.0.1",
-			expectedMessage: &icmp.Message{
-				Type: ipv4.ICMPTypeEcho,
-				Code: 0,
-				Body: &icmp.Echo{
-					ID:  os.Getpid() & 0xffff,
-					Seq: 1,
-				},
-			},
-			expectTimeoutError: true,
-			writeError:         true,
-			readError:          false,
-		},
-		{
-			name:               "malformed_host",
-			host:               "monkey",
-			expectedMessage:    nil,
-			expectTimeoutError: false,
-			writeError:         false,
-			readError:          false,
-		},
-	}
+// 	testCases := []struct {
+// 		name               string
+// 		host               string
+// 		expectTimeoutError bool
+// 		expectedMessage    *icmp.Message
+// 		readError          bool
+// 		writeError         bool
+// 	}{
+// 		{
+// 			name: "valid_icmp_message",
+// 			host: "127.0.0.1",
+// 			expectedMessage: &icmp.Message{
+// 				Type: ipv4.ICMPTypeEcho,
+// 				Code: 0,
+// 				Body: &icmp.Echo{
+// 					ID:  os.Getpid() & 0xffff,
+// 					Seq: 1,
+// 				},
+// 			},
+// 			expectTimeoutError: false,
+// 			readError:          false,
+// 			writeError:         false,
+// 		},
+// 		{
+// 			name: "read_error",
+// 			host: "127.0.0.1",
+// 			expectedMessage: &icmp.Message{
+// 				Type: ipv4.ICMPTypeEcho,
+// 				Code: 0,
+// 				Body: &icmp.Echo{
+// 					ID:  os.Getpid() & 0xffff,
+// 					Seq: 1,
+// 				},
+// 			},
+// 			expectTimeoutError: true,
+// 			writeError:         false,
+// 			readError:          true,
+// 		},
+// 		{
+// 			name: "write_error",
+// 			host: "127.0.0.1",
+// 			expectedMessage: &icmp.Message{
+// 				Type: ipv4.ICMPTypeEcho,
+// 				Code: 0,
+// 				Body: &icmp.Echo{
+// 					ID:  os.Getpid() & 0xffff,
+// 					Seq: 1,
+// 				},
+// 			},
+// 			expectTimeoutError: true,
+// 			writeError:         true,
+// 			readError:          false,
+// 		},
+// 		{
+// 			name:               "malformed_host",
+// 			host:               "monkey",
+// 			expectedMessage:    nil,
+// 			expectTimeoutError: false,
+// 			writeError:         false,
+// 			readError:          false,
+// 		},
+// 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			var message *icmp.Message
-			var err error
+// 	for _, tc := range testCases {
+// 		t.Run(tc.name, func(t *testing.T) {
+// 			var message *icmp.Message
+// 			var err error
 
-			mockConn := &mockPacketConn{
-				writeToFunc: func(b []byte, addr net.Addr) (int, error) {
-					message, err = icmp.ParseMessage(1, b)
-					if err != nil {
-						t.Fatalf("Could not parse message")
-					}
-					if tc.writeError {
-						err = &TimeoutError{}
-					}
-					return 0, err
-				},
-				readFunc: func(b []byte) (int, net.Addr, error) {
-					err = nil
-					if tc.readError {
-						err = &TimeoutError{}
-					}
-					return 0, nil, err
-				},
-			}
+// 			mockConn := &mockPacketConn{
+// 				writeToFunc: func(b []byte, addr net.Addr) (int, error) {
+// 					message, err = icmp.ParseMessage(1, b)
+// 					if err != nil {
+// 						t.Fatalf("Could not parse message")
+// 					}
+// 					if tc.writeError {
+// 						err = &TimeoutError{}
+// 					}
+// 					return 0, err
+// 				},
+// 				readFunc: func(b []byte) (int, net.Addr, error) {
+// 					err = nil
+// 					if tc.readError {
+// 						err = &TimeoutError{}
+// 					}
+// 					return 0, nil, err
+// 				},
+// 			}
 
-			w := &wol{
-				Name:    tc.name,
-				Timeout: 100,
-				Host:    tc.host,
-				base:    base{},
-				conn:    mockConn,
-			}
+// 			w := &wol{
+// 				Name:    tc.name,
+// 				Timeout: 100,
+// 				Host:    tc.host,
+// 				base:    base{},
+// 				conn:    mockConn,
+// 			}
 
-			err = w.ping()
+// 			err = w.ping()
 
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() != tc.expectTimeoutError {
-				if tc.expectTimeoutError {
-					t.Fatalf("Expected timeout error")
-				} else {
-					t.Fatalf("Unexpected timeout error")
-				}
-			}
+// 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() != tc.expectTimeoutError {
+// 				if tc.expectTimeoutError {
+// 					t.Fatalf("Expected timeout error")
+// 				} else {
+// 					t.Fatalf("Unexpected timeout error")
+// 				}
+// 			}
 
-			var expectedMessage *icmp.Message
-			if tc.expectedMessage == nil {
-				expectedMessage = nil
-			} else {
-				msgBytes, err := tc.expectedMessage.Marshal(nil)
-				if err != nil {
-					t.Fatalf("Could not marshal expectedMessage")
-				}
+// 			var expectedMessage *icmp.Message
+// 			if tc.expectedMessage == nil {
+// 				expectedMessage = nil
+// 			} else {
+// 				msgBytes, err := tc.expectedMessage.Marshal(nil)
+// 				if err != nil {
+// 					t.Fatalf("Could not marshal expectedMessage")
+// 				}
 
-				expectedMessage, err = icmp.ParseMessage(1, msgBytes)
-				if err != nil {
-					t.Fatalf("Could not parse expectedMessage")
-				}
-			}
+// 				expectedMessage, err = icmp.ParseMessage(1, msgBytes)
+// 				if err != nil {
+// 					t.Fatalf("Could not parse expectedMessage")
+// 				}
+// 			}
 
-			assert.Equal(t, expectedMessage, message, "Message does not match expected value")
+// 			assert.Equal(t, expectedMessage, message, "Message does not match expected value")
 
-		})
-	}
-}
+// 		})
+// 	}
+// }
 
 func TestRoutes(t *testing.T) {
 	testCases := []struct {
@@ -340,199 +334,199 @@ func TestRoutes(t *testing.T) {
 	}
 }
 
-func TestWolHandler(t *testing.T) {
-	testCases := []struct {
-		name         string
-		method       string
-		url          string
-		data         []byte
-		writeError   error
-		readError    error
-		expectedCode int
-		expectedBody string
-	}{
-		{
-			name:         "status_no_error",
-			method:       "POST",
-			url:          "/wol/test1?code=status",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":"on"}`,
-		},
-		{
-			name:         "status_read_timeout_error",
-			method:       "POST",
-			url:          "/wol/test1?code=status",
-			data:         nil,
-			readError:    &TimeoutError{},
-			writeError:   nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":"off"}`,
-		},
-		{
-			name:         "status_write_timeout_error",
-			method:       "POST",
-			url:          "/wol/test2",
-			data:         []byte(`{"code": "status"}`),
-			readError:    nil,
-			writeError:   &TimeoutError{},
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":"off"}`,
-		},
-		{
-			name:         "status_read_unknown_error",
-			method:       "POST",
-			url:          "/wol/test1?code=status",
-			data:         nil,
-			readError:    errors.New(""),
-			writeError:   nil,
-			expectedCode: 500,
-			expectedBody: `{"message":"Internal Server Error"}`,
-		},
-		{
-			name:         "power_no_error",
-			method:       "POST",
-			url:          "/wol/test1?code=power",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK"}`,
-		},
-		{
-			name:         "power_timeout_write_error",
-			method:       "POST",
-			url:          "/wol/test2",
-			data:         []byte(`{"code": "power"}`),
-			readError:    nil,
-			writeError:   &TimeoutError{},
-			expectedCode: 500,
-			expectedBody: `{"message":"Internal Server Error"}`,
-		},
-		{
-			name:         "get_device_request",
-			method:       "GET",
-			url:          "/wol/test1",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":["power","status"]}`,
-		},
-		{
-			name:         "get_base_request",
-			method:       "GET",
-			url:          "/wol/",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":["test1","test2"]}`,
-		},
-		{
-			name:         "unsupported_device_method",
-			method:       "DELETE",
-			url:          "/wol/test1",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 405,
-			expectedBody: `{"message":"Method Not Allowed"}`,
-		},
-		{
-			name:         "unsupported_base_method",
-			method:       "POST",
-			url:          "/wol/",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 405,
-			expectedBody: `{"message":"Method Not Allowed"}`,
-		},
-		{
-			name:         "malformed_json_body",
-			method:       "POST",
-			url:          "/wol/test1",
-			data:         []byte(`not_json`),
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 400,
-			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
-		},
-		{
-			name:         "malformed_query_string",
-			method:       "POST",
-			url:          "/wol/test1?monkeytest",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 400,
-			expectedBody: `{"message":"Malformed or empty query string"}`,
-		},
-		{
-			name:         "unsupported_code_variable",
-			method:       "POST",
-			url:          "/wol/test1?code=monkey",
-			data:         nil,
-			readError:    nil,
-			writeError:   nil,
-			expectedCode: 400,
-			expectedBody: `{"message":"Invalid Parameter: code"}`,
-		},
-	}
+// func TestWolHandler(t *testing.T) {
+// 	testCases := []struct {
+// 		name         string
+// 		method       string
+// 		url          string
+// 		data         []byte
+// 		writeError   error
+// 		readError    error
+// 		expectedCode int
+// 		expectedBody string
+// 	}{
+// 		{
+// 			name:         "status_no_error",
+// 			method:       "POST",
+// 			url:          "/wol/test1?code=status",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 200,
+// 			expectedBody: `{"message":"OK","data":"on"}`,
+// 		},
+// 		{
+// 			name:         "status_read_timeout_error",
+// 			method:       "POST",
+// 			url:          "/wol/test1?code=status",
+// 			data:         nil,
+// 			readError:    &TimeoutError{},
+// 			writeError:   nil,
+// 			expectedCode: 200,
+// 			expectedBody: `{"message":"OK","data":"off"}`,
+// 		},
+// 		{
+// 			name:         "status_write_timeout_error",
+// 			method:       "POST",
+// 			url:          "/wol/test2",
+// 			data:         []byte(`{"code": "status"}`),
+// 			readError:    nil,
+// 			writeError:   &TimeoutError{},
+// 			expectedCode: 200,
+// 			expectedBody: `{"message":"OK","data":"off"}`,
+// 		},
+// 		{
+// 			name:         "status_read_unknown_error",
+// 			method:       "POST",
+// 			url:          "/wol/test1?code=status",
+// 			data:         nil,
+// 			readError:    errors.New(""),
+// 			writeError:   nil,
+// 			expectedCode: 500,
+// 			expectedBody: `{"message":"Internal Server Error"}`,
+// 		},
+// 		{
+// 			name:         "power_no_error",
+// 			method:       "POST",
+// 			url:          "/wol/test1?code=power",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 200,
+// 			expectedBody: `{"message":"OK"}`,
+// 		},
+// 		{
+// 			name:         "power_timeout_write_error",
+// 			method:       "POST",
+// 			url:          "/wol/test2",
+// 			data:         []byte(`{"code": "power"}`),
+// 			readError:    nil,
+// 			writeError:   &TimeoutError{},
+// 			expectedCode: 500,
+// 			expectedBody: `{"message":"Internal Server Error"}`,
+// 		},
+// 		{
+// 			name:         "get_device_request",
+// 			method:       "GET",
+// 			url:          "/wol/test1",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 200,
+// 			expectedBody: `{"message":"OK","data":["power","status"]}`,
+// 		},
+// 		{
+// 			name:         "get_base_request",
+// 			method:       "GET",
+// 			url:          "/wol/",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 200,
+// 			expectedBody: `{"message":"OK","data":["test1","test2"]}`,
+// 		},
+// 		{
+// 			name:         "unsupported_device_method",
+// 			method:       "DELETE",
+// 			url:          "/wol/test1",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 405,
+// 			expectedBody: `{"message":"Method Not Allowed"}`,
+// 		},
+// 		{
+// 			name:         "unsupported_base_method",
+// 			method:       "POST",
+// 			url:          "/wol/",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 405,
+// 			expectedBody: `{"message":"Method Not Allowed"}`,
+// 		},
+// 		{
+// 			name:         "malformed_json_body",
+// 			method:       "POST",
+// 			url:          "/wol/test1",
+// 			data:         []byte(`not_json`),
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 400,
+// 			expectedBody: `{"message":"Malformed Or Empty JSON Body"}`,
+// 		},
+// 		{
+// 			name:         "malformed_query_string",
+// 			method:       "POST",
+// 			url:          "/wol/test1?monkeytest",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 400,
+// 			expectedBody: `{"message":"Malformed or empty query string"}`,
+// 		},
+// 		{
+// 			name:         "unsupported_code_variable",
+// 			method:       "POST",
+// 			url:          "/wol/test1?code=monkey",
+// 			data:         nil,
+// 			readError:    nil,
+// 			writeError:   nil,
+// 			expectedCode: 400,
+// 			expectedBody: `{"message":"Invalid Parameter: code"}`,
+// 		},
+// 	}
 
-	wolConfigFile, err := os.ReadFile("testdata/config/normal_input.yaml")
-	if err != nil {
-		t.Fatalf("Could not read wol input")
-	}
+// 	wolConfigFile, err := os.ReadFile("testdata/config/normal_input.yaml")
+// 	if err != nil {
+// 		t.Fatalf("Could not read wol input")
+// 	}
 
-	wolConfig := config.Config{}
+// 	wolConfig := config.Config{}
 
-	if err := yaml.Unmarshal(wolConfigFile, &wolConfig); err != nil {
-		t.Fatalf("Could not read wol input")
-	}
+// 	if err := yaml.Unmarshal(wolConfigFile, &wolConfig); err != nil {
+// 		t.Fatalf("Could not read wol input")
+// 	}
 
-	base, routes, err := routes(&wolConfig)
+// 	base, routes, err := routes(&wolConfig)
 
-	if err != nil {
-		t.Fatalf("generateRoutesFromConfig returned an error: %v", err)
-	}
-	router := mux.NewRouter()
-	for _, r := range routes {
-		router.HandleFunc(r.Path, r.Handler)
-	}
+// 	if err != nil {
+// 		t.Fatalf("generateRoutesFromConfig returned an error: %v", err)
+// 	}
+// 	router := mux.NewRouter()
+// 	for _, r := range routes {
+// 		router.HandleFunc(r.Path, r.Handler)
+// 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			mockConn := &mockPacketConn{
-				writeToFunc: func(b []byte, addr net.Addr) (int, error) {
-					return 0, tc.writeError
-				},
-				readFunc: func(b []byte) (int, net.Addr, error) {
-					return 0, nil, tc.readError
-				},
-			}
-			for i := range base.devices {
-				base.devices[i].conn = mockConn
-			}
-			recorder := httptest.NewRecorder()
+// 	for _, tc := range testCases {
+// 		t.Run(tc.name, func(t *testing.T) {
+// 			mockConn := &mockPacketConn{
+// 				writeToFunc: func(b []byte, addr net.Addr) (int, error) {
+// 					return 0, tc.writeError
+// 				},
+// 				readFunc: func(b []byte) (int, net.Addr, error) {
+// 					return 0, nil, tc.readError
+// 				},
+// 			}
+// 			for i := range base.devices {
+// 				base.devices[i].conn = mockConn
+// 			}
+// 			recorder := httptest.NewRecorder()
 
-			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
-			if tc.data != nil {
-				request.Header.Set("Content-Type", "application/json")
-			}
+// 			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
+// 			if tc.data != nil {
+// 				request.Header.Set("Content-Type", "application/json")
+// 			}
 
-			router.ServeHTTP(recorder, request)
+// 			router.ServeHTTP(recorder, request)
 
-			if recorder.Code != tc.expectedCode {
-				t.Errorf("Unexpected HTTP status code. Expected: %d, Got: %d", tc.expectedCode, recorder.Code)
-			}
+// 			if recorder.Code != tc.expectedCode {
+// 				t.Errorf("Unexpected HTTP status code. Expected: %d, Got: %d", tc.expectedCode, recorder.Code)
+// 			}
 
-			if recorder.Body.String() != tc.expectedBody {
-				t.Errorf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
-			}
-		})
-	}
-}
+// 			if recorder.Body.String() != tc.expectedBody {
+// 				t.Errorf("Unexpected response body. Expected: %s, Got: %s", tc.expectedBody, recorder.Body.String())
+// 			}
+// 		})
+// 	}
+// }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -43,8 +42,9 @@ type radiatorConfig struct {
 }
 
 type radiatorStatus struct {
-	CurrentSet int64  `json:"currentSet"`
-	Room       int64  `json:"room"`
+	CurrentSet *int64 `json:"currentSet"`
+	Room       *int64 `json:"room"`
+	OnOff      *int64 `json:"onoff"`
 	Id         string `json:"id"`
 }
 
@@ -55,6 +55,7 @@ type rawStatus struct {
 	} `json:"header"`
 	Payload struct {
 		Temperature []radiatorStatus `json:"temperature"`
+		ToggleX     []radiatorStatus `json:"togglex"`
 	} `json:"payload"`
 }
 
@@ -106,10 +107,11 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 	listeners := []listener{}
 	base := base{}
 	base.RadiatorMap = map[string]string{}
+	bthomeDevices := map[string]struct{}{}
 
 	// Build map of radiator IDs to names for meross_radiator devices
 	for _, d := range config.Devices {
-		if d.Type != "meross" {
+		if d.Type != "meross" && d.Type != "bthome" {
 			continue
 		}
 
@@ -127,6 +129,12 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 			continue
 		}
 
+		// Collect a map of bthome devices for future validation
+		if d.Type == "bthome" {
+			bthomeDevices[radiatorConfig.Name] = struct{}{}
+			continue
+		}
+
 		if radiatorConfig.DeviceType != "radiator" {
 			continue
 		}
@@ -134,9 +142,17 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 		for _, id := range radiatorConfig.Ids {
 			base.RadiatorMap[id] = radiatorConfig.Name
 		}
+
 	}
 
-	// Check if any listeners were created
+	// Clean up RadiatorMap to only include devices that have a corresponding bthome device
+	for key, value := range base.RadiatorMap {
+		if _, ok := bthomeDevices[value]; !ok {
+			delete(base.RadiatorMap, key)
+		}
+	}
+
+	// Check if any valid radiator devices were found
 	if len(base.RadiatorMap) == 0 {
 		return nil, []listener{}, errors.New("no radiator devices found in config")
 	}
@@ -284,18 +300,46 @@ func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
 		radiatorStatus = &status.Payload.Temperature[0]
 	}
 
+	// Fallback to ToggleX if Temperature is not present
+	if radiatorStatus == nil && len(status.Payload.ToggleX) != 0 {
+		radiatorStatus = &status.Payload.ToggleX[0]
+	}
+
 	// Perform thermostat sync if the message originates from TRV,
 	// and record that MQTT was the trigger.
 	if status.Header.Namespace == "Appliance.Hub.Mts100.Temperature" || status.Header.Namespace == "Appliance.Control.Thermostat.Mode" {
 		l.thermostatSync()
 	}
 
-	// Only proceed with btHomeSync if message originates from TRV and has room data
-	if status.Header.Namespace != "Appliance.Hub.Mts100.Temperature" || radiatorStatus == nil || radiatorStatus.Id == "" || radiatorStatus.Room == 0 {
+	// Only proceed with btHomeSync if message originates from TRV and has an ID
+	if (status.Header.Namespace != "Appliance.Hub.Mts100.Temperature" && status.Header.Namespace != "Appliance.Hub.ToggleX") ||
+		radiatorStatus == nil || radiatorStatus.Id == "" {
 		return
 	}
 
-	l.btHomeSyncTemperature(radiatorStatus)
+	// Radiator ID must be in the RadiatorMap to meaningfully proceed
+	if _, ok := l.Base.RadiatorMap[radiatorStatus.Id]; !ok {
+		logging.Log(logging.Info, "Received message for unknown radiator with id %s, ignoring", radiatorStatus.Id)
+		return
+	}
+
+	// Perform BTHome temperature sync if Room temperature is present
+	if radiatorStatus.Room != nil {
+		l.btHomeSyncTemperature(radiatorStatus)
+		return
+	}
+
+	// TRV's change to mode 0 (custom) when on/off is toggled, in practise this means a battery is nearly drained on a TRV,
+	// so we force each radiator back to mode 3 (auto) to cover the edge case
+	if radiatorStatus.OnOff != nil {
+		httpStatus, err := l.setEveryRadiatorMode(3)
+		if err != nil || httpStatus != 200 {
+			logging.Log(logging.Error, "Failed to set radiator mode for id %s: %v (HTTP status: %d)", radiatorStatus.Id, err, httpStatus)
+			return
+		}
+		logging.Log(logging.Info, "on/off change detected for radiator with id %s, enforcing mode 3 (auto)", radiatorStatus.Id)
+		return
+	}
 }
 
 // Paho can trigger writes to this map concurrently, so we need to use a concurrent map implementation, e.g sync.Map
@@ -305,7 +349,6 @@ var settleTime = 1 * time.Minute
 // btHomeSyncTemperature uses external BTHome temperature sensors to make adjustments to the onboard Meross TRV temperature reading
 // @param message The MQTT message containing the thermostat status
 func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
-
 	// Lookup BTHome name from radiator ID
 	btHomeName, ok := l.Base.RadiatorMap[radiatorStatus.Id]
 	if !ok {
@@ -350,16 +393,15 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 	}
 
 	// Meross does not expose a pre-adjusted temperature, so we need to recover it by applying the adjust delta
-	// adjust is in 100ths and raditaorStatus.Room is in 10ths and to the nearest 0.5, so the best resolution we can get is 0.5 degrees
+	// adjust is in 100ths and radiatorStatus.Room is in 10ths and to the nearest 0.5, so the best estimate we can get is within 0.5 degrees
 	// Divide adjustDelta by 10 to convert to 10ths, then subtract from room temperature
-	correctedTemperature := radiatorStatus.Room - (adjustDelta / 10)
+	correctedTemperature := *radiatorStatus.Room - (adjustDelta / 10)
 
 	// Calculate new adjust delta
 	// Convert from 10ths to floating point representation of temperature
 	correctedTemperatureFloat := float64(correctedTemperature) / 10
-	// Calculate delta betweeen BTHome temperature and corrected TRV temperature, rounding to nearest 0.5 degrees and converting to 100ths
-	deltaFloat := (btHomeTemperature - correctedTemperatureFloat) / 0.5
-	delta := int64(math.Round(deltaFloat) * 0.5 * 100)
+	// Calculate delta betweeen BTHome temperature and corrected TRV temperature, converting back to 100ths
+	delta := int64((btHomeTemperature - correctedTemperatureFloat) * 100)
 
 	// Sanity check delta, meross allows +/- 500 max (5 degrees)
 	if max(delta, -delta) > 500 {
@@ -382,6 +424,15 @@ func (l *listener) btHomeSyncTemperature(radiatorStatus *radiatorStatus) {
 
 // thermostatSync checks if any TRVs are requesting heat and toggles the thermostat state accordingly
 func (l *listener) thermostatSync() {
+	last := lastThermostatSyncFromMQTT.Load()
+	lastTime := time.Unix(0, last)
+	recentTime := time.Duration(60) * time.Second
+
+	// Skip if we recently synced from MQTT
+	if time.Since(lastTime) < recentTime {
+		return
+	}
+
 	radiatorStatus, httpStatus, err := l.getEachRadiatorStatus()
 	if err != nil || httpStatus != 200 {
 		logging.Log(logging.Error, "Failed to get radiator status: %v (HTTP status: %d)", err, httpStatus)
@@ -514,6 +565,25 @@ func (l *listener) getRadiatorAdjust(id string) (*radiatorResponse, int, error) 
 // @return HTTP status code, and error if any.
 func (l *listener) setRadiatorAdjust(id string, value int64) (int, error) {
 	_, httpStatus, err := l.post(fmt.Sprintf("%s/%s", l.Config.Radiator.URL, id), map[string]string{"code": "adjust", "value": fmt.Sprintf("%d", value)})
+	if err != nil || httpStatus != 200 {
+		return httpStatus, err
+	}
+
+	return httpStatus, nil
+}
+
+// setEveryRadiatorMode sets the radiator mode for all radiators to the given value.
+// @param value The mode value to set.
+// @return HTTP status code, and error if any.
+func (l *listener) setEveryRadiatorMode(value int64) (int, error) {
+	// Build comma-separated list of radiator IDs
+	radiatorKeys := []string{}
+	for key := range l.Base.RadiatorMap {
+		radiatorKeys = append(radiatorKeys, key)
+	}
+	hosts := strings.Join(radiatorKeys, ",")
+
+	_, httpStatus, err := l.post(l.Config.Radiator.URL, map[string]string{"hosts": hosts, "code": "mode", "value": fmt.Sprintf("%d", value)})
 	if err != nil || httpStatus != 200 {
 		return httpStatus, err
 	}
