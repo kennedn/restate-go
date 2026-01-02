@@ -25,6 +25,9 @@ WORKDIR /app
 # Copy the compiled binary from the builder stage
 COPY --from=builder /app/restate /app/restate
 
+# Copy CA certificates for HTTPS support
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
 # Default config path – overridden/populated by a ConfigMap volume in Kubernetes
 ENV RESTATECONFIG=/app/config.yaml
 
