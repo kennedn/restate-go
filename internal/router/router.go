@@ -17,8 +17,8 @@ func NewRouter(routes []router.Route) *mux.Router {
 
 	// Allow CORS via middleware
 	router.Use(handlers.CORS(
-		handlers.AllowedOrigins([]string{"http://restate-go.default.svc.cluster.local"}),
-		handlers.AllowedMethods([]string{"GET", "POST", "OPTIONS"}),
+        handlers.AllowedOrigins([]string{"https://stateful.kennedn.com"}),
+		handlers.AllowedMethods([]string{"*"}),
 		handlers.AllowedHeaders([]string{"*"}),
 	))
 
