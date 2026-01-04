@@ -11,6 +11,10 @@ metadata:
       satisfy any;
       allow 192.168.1.0/24;
       deny all;
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://stateful.kennedn.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET,POST,PUT,DELETE,PATCH,OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "*"
     cert-manager.io/cluster-issuer: "letsencrypt-prod"
 spec:
   tls:
