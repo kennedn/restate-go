@@ -212,7 +212,9 @@ func routes(config *config.Config, internalConfigOverride *[]byte) (*base, []rou
 func (m *meross) getCodes() []string {
 	var codes []string
 	for _, e := range m.Base.Endpoints {
-		codes = append(codes, e.Code)
+		if slices.Contains(e.SupportedDevices, m.DeviceType) {
+			codes = append(codes, e.Code)
+		}
 	}
 	return codes
 }
@@ -319,7 +321,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	if r.Method == http.MethodGet {
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", m.getCodes())
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", map[string]any{"codes": m.getCodes()})
 		return
 	}
 

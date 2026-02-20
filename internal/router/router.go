@@ -17,7 +17,7 @@ func NewRouter(routes []router.Route) *mux.Router {
 
 	// Allow CORS via middleware
 	router.Use(handlers.CORS(
-        handlers.AllowedOrigins([]string{"https://stateful.kennedn.com"}),
+		handlers.AllowedOrigins([]string{"https://stateful.kennedn.com", "http://localhost:5173"}),
 		handlers.AllowedMethods([]string{"*"}),
 		handlers.AllowedHeaders([]string{"*"}),
 	))

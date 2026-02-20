@@ -48,12 +48,14 @@ func main() {
 	listeners, err := frigate.Listeners(&configMap)
 	if err != nil {
 		logging.Log(logging.Info, err.Error())
+		os.Exit(1)
 	}
 
 	thermostat := &thermostat.Device{}
 	listeners2, err := thermostat.Listeners(&configMap)
 	if err != nil {
 		logging.Log(logging.Info, err.Error())
+		os.Exit(1)
 	}
 
 	if len(routes) == 0 && len(listeners) == 0 && len(listeners2) == 0 {
