@@ -280,7 +280,7 @@ func TestHandler(t *testing.T) {
 			serverConfig: normalServerConfig,
 			merossConfig: normalMerossConfig,
 			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":["toggle","status","luminance","temperature","rgb","fade"]}`,
+			expectedBody: `{"message":"OK","data":{"codes":["toggle","status","luminance","temperature","rgb","fade"]}}`,
 		},
 		{
 			name:         "get_base_request",

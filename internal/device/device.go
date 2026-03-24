@@ -8,6 +8,7 @@ import (
 	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
 	"github.com/kennedn/restate-go/internal/device/alert"
+	"github.com/kennedn/restate-go/internal/device/bins"
 	"github.com/kennedn/restate-go/internal/device/bthome"
 	"github.com/kennedn/restate-go/internal/device/common"
 	"github.com/kennedn/restate-go/internal/device/hikvision"
@@ -31,6 +32,7 @@ type Devices struct {
 var (
 	devices = []Device{
 		&alert.Device{},
+		&bins.Device{},
 		&msgeneric.Device{},
 		&mts200b.Device{},
 		&msh300hk.Device{},
