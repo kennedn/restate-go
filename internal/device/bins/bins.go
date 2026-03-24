@@ -8,6 +8,8 @@ import (
 	"mime"
 	"net/http"
 	"net/http/cookiejar"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -289,8 +291,20 @@ func (b *bins) lookupBins(client *http.Client, uprn string) ([]Response, int, er
 		return nil, responseCode, err
 	}
 
+	keys := []int{}
+	for key := range rawResponse.Integration.Transformed.RowsData {
+		i, err := strconv.Atoi(key)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, i)
+	}
+
+	sort.Ints(keys)
+
 	responses := []Response{}
-	for _, row := range rawResponse.Integration.Transformed.RowsData {
+	for _, key := range keys {
+		row := rawResponse.Integration.Transformed.RowsData[strconv.Itoa(key)]
 		responses = append(responses, Response{
 			Name: stripNumbers(row.Round),
 			Date: toISOString(row.Date),
