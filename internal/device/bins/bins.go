@@ -8,8 +8,6 @@ import (
 	"mime"
 	"net/http"
 	"net/http/cookiejar"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +15,8 @@ import (
 	"github.com/kennedn/restate-go/internal/common/logging"
 	device "github.com/kennedn/restate-go/internal/device/common"
 	router "github.com/kennedn/restate-go/internal/router/common"
+
+	_ "time/tzdata"
 
 	"github.com/gorilla/schema"
 	"gopkg.in/yaml.v3"
@@ -289,20 +289,8 @@ func (b *bins) lookupBins(client *http.Client, uprn string) ([]Response, int, er
 		return nil, responseCode, err
 	}
 
-	keys := []int{}
-	for key := range rawResponse.Integration.Transformed.RowsData {
-		i, err := strconv.Atoi(key)
-		if err != nil {
-			continue
-		}
-		keys = append(keys, i)
-	}
-
-	sort.Ints(keys)
-
 	responses := []Response{}
-	for _, key := range keys {
-		row := rawResponse.Integration.Transformed.RowsData[strconv.Itoa(key)]
+	for _, row := range rawResponse.Integration.Transformed.RowsData {
 		responses = append(responses, Response{
 			Name: stripNumbers(row.Round),
 			Date: toISOString(row.Date),
