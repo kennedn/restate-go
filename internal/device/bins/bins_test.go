@@ -267,7 +267,7 @@ func TestHandlers(t *testing.T) {
 			data:         nil,
 			configData:   normalConfig(),
 			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23"},{"name":"Red","date":"2026-03-23"},{"name":"Grey","date":"2026-03-24"}]}`,
+			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23T00:00:00Z"},{"name":"Red","date":"2026-03-23T00:00:00Z"},{"name":"Grey","date":"2026-03-24T00:00:00Z"}]}`,
 			contentType:  "application/json",
 		},
 		{
@@ -277,7 +277,7 @@ func TestHandlers(t *testing.T) {
 			data:         []byte(`{"address":"42 EXAMPLE STREET TESTTOWN AB1 2CD"}`),
 			configData:   normalConfig(),
 			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23"},{"name":"Red","date":"2026-03-23"},{"name":"Grey","date":"2026-03-24"}]}`,
+			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23T00:00:00Z"},{"name":"Red","date":"2026-03-23T00:00:00Z"},{"name":"Grey","date":"2026-03-24T00:00:00Z"}]}`,
 			contentType:  "application/json",
 		},
 		{
@@ -287,7 +287,7 @@ func TestHandlers(t *testing.T) {
 			data:         nil,
 			configData:   normalConfig(),
 			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23"},{"name":"Red","date":"2026-03-23"},{"name":"Grey","date":"2026-03-24"}]}`,
+			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23T00:00:00Z"},{"name":"Red","date":"2026-03-23T00:00:00Z"},{"name":"Grey","date":"2026-03-24T00:00:00Z"}]}`,
 			contentType:  "application/json",
 		},
 		{
@@ -327,7 +327,7 @@ func TestHandlers(t *testing.T) {
 			data:         []byte(`{"address":"42 EXAMPLE STREET TESTTOWN AB1 2CD"}`),
 			configData:   singleDeviceConfig(),
 			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23"},{"name":"Red","date":"2026-03-23"},{"name":"Grey","date":"2026-03-24"}]}`,
+			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23T00:00:00Z"},{"name":"Red","date":"2026-03-23T00:00:00Z"},{"name":"Grey","date":"2026-03-24T00:00:00Z"}]}`,
 			contentType:  "application/json",
 		},
 		{
@@ -397,7 +397,7 @@ func TestHandlers(t *testing.T) {
 			data:         []byte(`{"address":"42 EXAMPLE STREET TESTTOWN AB1 2CD"}`),
 			configData:   normalConfig(),
 			expectedCode: 200,
-			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23"},{"name":"Red","date":"2026-03-23"},{"name":"Grey","date":"2026-03-24"}]}`,
+			expectedBody: `{"message":"OK","data":[{"name":"Food","date":"2026-03-23T00:00:00Z"},{"name":"Red","date":"2026-03-23T00:00:00Z"},{"name":"Grey","date":"2026-03-24T00:00:00Z"}]}`,
 			contentType:  "application/json; charset=utf-8",
 		},
 	}
