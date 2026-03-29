@@ -162,7 +162,7 @@ func toISOString(input string) string {
 		return ""
 	}
 
-	return t.Format("2006-01-02")
+	return t.Format(time.RFC3339)
 }
 
 func currentDate() string {
