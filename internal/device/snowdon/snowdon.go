@@ -48,6 +48,11 @@ type snowdon struct {
 	Status   map[string]string
 }
 
+type statusData struct {
+	OnOff string `json:"onoff"`
+	Input string `json:"input"`
+}
+
 type base struct {
 	Devices []*snowdon
 }
@@ -285,7 +290,14 @@ func (s *snowdon) handler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if request.Code == "status" {
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, response.Message, response.Data)
+		onoff := "on"
+		if response.Data == "off" {
+			onoff = "off"
+		}
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, response.Message, statusData{
+			OnOff: onoff,
+			Input: response.Data,
+		})
 		return
 	}
 

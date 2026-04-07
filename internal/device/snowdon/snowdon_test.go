@@ -51,12 +51,10 @@ func setupWSServer(t *testing.T, serverConfigPath string) *httptest.Server {
 			t.Fatalf("Could not read websocket message: %v", err)
 		}
 
-		request := struct {
-			Code string
-		}{Code: string(msg)}
+		requestCode := string(msg)
 
 		for _, s := range serverConfig.Codes {
-			if request.Code == s.Code {
+			if requestCode == s.Code {
 				if err := conn.WriteMessage(websocket.TextMessage, []byte(s.Response)); err != nil {
 					t.Fatalf("Could not write websocket message: %v", err)
 				}
@@ -64,7 +62,7 @@ func setupWSServer(t *testing.T, serverConfigPath string) *httptest.Server {
 			}
 		}
 
-		t.Fatalf("No canned websocket response found for input: %s", request.Code)
+		t.Fatalf("No canned websocket response found for input: %s", requestCode)
 	}))
 
 	return server
@@ -120,16 +118,16 @@ func TestRoutes(t *testing.T) {
 
 			snowdonConfig := config.Config{}
 			if err := yaml.Unmarshal(snowdonConfigFile, &snowdonConfig); err != nil {
-				t.Fatalf("Could not read config file")
+				t.Fatalf("Could not parse config file")
 			}
 
 			device := &Device{}
-			r, err := device.Routes(&snowdonConfig)
+			routes, err := device.Routes(&snowdonConfig)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
-			if len(r) != tc.routeCount {
-				t.Fatalf("Wrong number of routes returned, Expected: %d, Got: %d", tc.routeCount, len(r))
+			if len(routes) != tc.routeCount {
+				t.Fatalf("Wrong number of routes returned, Expected: %d, Got: %d", tc.routeCount, len(routes))
 			}
 		})
 	}
@@ -156,13 +154,13 @@ func TestHandlers(t *testing.T) {
 			serverConfig:  "testdata/serverConfig/normal_responses.yaml",
 			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
 			expectedCode:  200,
-			expectedBody:  `{"message":"OK","data":"aux"}`,
+			expectedBody:  `{"message":"OK","data":{"onoff":"on","input":"aux"}}`,
 		},
 		{
 			name:          "power_no_error",
 			method:        "POST",
 			url:           "/snowdon/test2",
-			data:          []byte(`{"code": "power"}`),
+			data:          []byte(`{"code":"power"}`),
 			serverConfig:  "testdata/serverConfig/normal_responses.yaml",
 			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
 			expectedCode:  200,
@@ -278,6 +276,16 @@ func TestHandlers(t *testing.T) {
 			expectedCode:  500,
 			expectedBody:  `{"message":"Internal Server Error"}`,
 		},
+		{
+			name:          "status_off_mapping",
+			method:        "POST",
+			url:           "/snowdon/test1?code=status",
+			data:          nil,
+			serverConfig:  "testdata/serverConfig/status_off_response.yaml",
+			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
+			expectedCode:  200,
+			expectedBody:  `{"message":"OK","data":{"onoff":"off","input":"off"}}`,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -289,7 +297,7 @@ func TestHandlers(t *testing.T) {
 
 			snowdonConfig := config.Config{}
 			if err := yaml.Unmarshal(snowdonConfigFile, &snowdonConfig); err != nil {
-				t.Fatalf("Could not read snowdon input")
+				t.Fatalf("Could not parse snowdon input")
 			}
 
 			base, routes, err := routes(&snowdonConfig, nil)
