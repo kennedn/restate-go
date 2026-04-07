@@ -3,9 +3,8 @@ package snowdon
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/kennedn/restate-go/internal/common/config"
@@ -13,25 +12,40 @@ import (
 	device "github.com/kennedn/restate-go/internal/device/common"
 	router "github.com/kennedn/restate-go/internal/router/common"
 
+	_ "embed"
+
 	"github.com/gorilla/schema"
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
+	"github.com/gorilla/websocket"
 	"gopkg.in/yaml.v3"
 )
 
+//go:embed device.yaml
+var defaultInternalConfig []byte
+
+type internalConfig struct {
+	Commands map[string]string `yaml:"commands"`
+	Status   map[string]string `yaml:"status"`
+}
+
 type rawResponse struct {
-	Code    []string `json:"code,omitempty"`
-	Onoff   string   `json:"onoff,omitempty"`
-	Input   string   `json:"input,omitempty"`
-	Status  string   `json:"status,omitempty"`
-	Message string   `json:"message,omitempty"`
+	Message string `json:"message,omitempty"`
+	Data    string `json:"data,omitempty"`
+}
+
+type deviceResponse struct {
+	Prefix string
+	Result string
+	Code   string
+	Raw    string
 }
 
 type snowdon struct {
-	Name    string `yaml:"name"`
-	Host    string `yaml:"host"`
-	Timeout uint   `yaml:"timeoutMs"`
-	Base    base
+	Name     string `yaml:"name"`
+	Host     string `yaml:"host"`
+	Timeout  uint   `yaml:"timeoutMs"`
+	Base     base
+	Commands map[string]string
+	Status   map[string]string
 }
 
 type base struct {
@@ -40,21 +54,47 @@ type base struct {
 
 type Device struct{}
 
+func (s *snowdon) getCommandNames() []string {
+	var names []string
+	for name := range s.Commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func (d *Device) Routes(config *config.Config) ([]router.Route, error) {
-	_, routes, err := routes(config)
+	_, routes, err := routes(config, nil)
 	return routes, err
 }
 
-func routes(config *config.Config) (*base, []router.Route, error) {
+func routes(config *config.Config, internalConfigOverride *[]byte) (*base, []router.Route, error) {
 	routes := []router.Route{}
 	base := base{}
+
+	internal := defaultInternalConfig
+	if internalConfigOverride != nil {
+		internal = *internalConfigOverride
+	}
+
+	cfg := internalConfig{}
+	if err := yaml.Unmarshal(internal, &cfg); err != nil {
+		return nil, []router.Route{}, err
+	}
+
+	if len(cfg.Commands) == 0 {
+		return nil, []router.Route{}, errors.New("no commands present in config")
+	}
 
 	for _, d := range config.Devices {
 		if d.Type != "snowdon" {
 			continue
 		}
+
 		snowdon := snowdon{
-			Base: base,
+			Base:     base,
+			Commands: cfg.Commands,
+			Status:   cfg.Status,
 		}
 
 		yamlConfig, err := yaml.Marshal(d.Config)
@@ -78,14 +118,19 @@ func routes(config *config.Config) (*base, []router.Route, error) {
 			Handler: snowdon.handler,
 		})
 
+		routes = append(routes, router.Route{
+			Path:    "/" + snowdon.Name + "/",
+			Handler: snowdon.handler,
+		})
+
 		base.Devices = append(base.Devices, &snowdon)
 
 		logging.Log(logging.Info, "Found device \"%s\"", snowdon.Name)
 	}
 
-	if len(routes) == 0 {
-		return nil, []router.Route{}, errors.New("no routes generated from config")
-	} else if len(routes) == 1 {
+	if len(base.Devices) == 0 {
+		return nil, []router.Route{}, errors.New("no devices found in config")
+	} else if len(base.Devices) == 1 {
 		return &base, routes, nil
 	}
 
@@ -102,65 +147,110 @@ func routes(config *config.Config) (*base, []router.Route, error) {
 		Path:    "/snowdon/",
 		Handler: base.handler,
 	})
+
 	return &base, routes, nil
 }
 
-func (s *snowdon) call(method string, code string) (*rawResponse, int, error) {
-	client := &http.Client{
-		Timeout: time.Duration(s.Timeout) * time.Millisecond,
-	}
-
-	queryUrl := fmt.Sprintf("http://%s/?code=%s", s.Host, code)
-
-	req, err := http.NewRequest(method, queryUrl, nil)
-
-	if err != nil {
-		return nil, 0, err
-	}
-	// Send the request and get the response
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, resp.StatusCode, err
-	}
-
-	rawResponse := rawResponse{}
-
-	if err := json.Unmarshal(body, &rawResponse); err != nil {
-		return nil, resp.StatusCode, err
-	}
-
-	return &rawResponse, resp.StatusCode, nil
+func (s *snowdon) getCommandCode(name string) string {
+	return s.Commands[name]
 }
 
-func capitalise(str string) string {
-	return cases.Title(language.English).String(str)
+func (s *snowdon) getStatusName(code string) string {
+	return s.Status[code]
+}
+
+func (s *snowdon) websocketWriteWithResponse(data string) ([]byte, error) {
+	conn, _, err := websocket.DefaultDialer.Dial("ws://"+s.Host, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+
+	if len(data) != 8 {
+		return nil, errors.New("constructed message did not have the expected size")
+	}
+
+	err = conn.WriteMessage(websocket.TextMessage, []byte(data))
+	if err != nil {
+		return nil, err
+	}
+
+	conn.SetReadDeadline(time.Now().Add(time.Duration(s.Timeout) * time.Millisecond))
+	_, response, err := conn.ReadMessage()
+	if err != nil {
+		return nil, err
+	}
+
+	return response, nil
+}
+
+func parseDeviceResponse(response []byte) (*deviceResponse, error) {
+	if len(response) != 8 {
+		return nil, errors.New("unexpected response length")
+	}
+
+	raw := string(response)
+	result := raw[4:6]
+
+	if result != "OK" && result != "NG" {
+		return nil, errors.New("unexpected response status")
+	}
+
+	return &deviceResponse{
+		Prefix: raw[0:4],
+		Result: result,
+		Code:   raw[6:8],
+		Raw:    raw,
+	}, nil
+}
+
+func (s *snowdon) call(code string) (*rawResponse, int, error) {
+	command := s.getCommandCode(code)
+	if command == "" {
+		return nil, http.StatusBadRequest, errors.New("invalid parameter: code")
+	}
+
+	response, err := s.websocketWriteWithResponse(command)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+
+	parsed, err := parseDeviceResponse(response)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err
+	}
+
+	if parsed.Result == "NG" {
+		message := "Device Error"
+		return nil, http.StatusBadGateway, errors.New(message)
+	}
+
+	if code == "status" {
+		value := s.getStatusName(parsed.Code)
+		if value == "" {
+			return nil, http.StatusInternalServerError, errors.New("unknown status response")
+		}
+		return &rawResponse{
+			Message: "OK",
+			Data:    value,
+		}, http.StatusOK, nil
+	}
+
+	return &rawResponse{
+		Message: "OK",
+	}, http.StatusOK, nil
 }
 
 func (s *snowdon) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int
-	var err error
 
 	defer func() {
 		device.JSONResponse(w, httpCode, jsonResponse)
 	}()
 
 	if r.Method == http.MethodGet {
-		response, responseCode, err := s.call("GET", "")
-		if err != nil {
-			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-			return
-		} else if responseCode != 200 {
-			httpCode, jsonResponse = device.SetJSONResponse(responseCode, capitalise(response.Message), nil)
-			return
-		}
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", response.Code)
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", s.getCommandNames())
 		return
 	}
 
@@ -183,19 +273,23 @@ func (s *snowdon) handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	response, responseCode, err := s.call("PUT", request.Code)
-	if err != nil || responseCode == 500 {
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
-		return
-	} else if responseCode != 200 {
-		httpCode, jsonResponse = device.SetJSONResponse(responseCode, capitalise(response.Message), nil)
+	response, responseCode, err := s.call(request.Code)
+	if err != nil {
+		switch responseCode {
+		case http.StatusBadRequest:
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusBadRequest, "Invalid Parameter: code", nil)
+		default:
+			httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		}
 		return
 	}
+
 	if request.Code == "status" {
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", response)
-	} else {
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, "OK", nil)
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, response.Message, response.Data)
+		return
 	}
+
+	httpCode, jsonResponse = device.SetJSONResponse(http.StatusOK, response.Message, nil)
 }
 
 func (b *base) getDeviceNames() []string {
@@ -206,7 +300,6 @@ func (b *base) getDeviceNames() []string {
 	return names
 }
 
-// Handler is the HTTP handler for handling requests to control multiple snowdon devices.
 func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int

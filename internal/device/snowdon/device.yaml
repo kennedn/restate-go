@@ -1,0 +1,29 @@
+commands:
+  status: "807FFFFF"
+  power: "807F807F"
+  input: "807F40BF"
+  mute: "807FCC33"
+  volume_up: "807FC03F"
+  volume_down: "807F10EF"
+  previous: "807FA05F"
+  next: "807F609F"
+  play_pause: "807FE01F"
+  treble_up: "807FA45B"
+  treble_down: "807FE41B"
+  bass_up: "807F20DF"
+  bass_down: "807F649B"
+  pair: "807F906F"
+  flat: "807F48B7"
+  music: "807F946B"
+  dialog: "807F54AB"
+  movie: "807F14EB"
+
+status:
+  "06": "off"
+  "04": "optical"
+  "00": "aux"
+  "05": "line-in"
+  "03": "bluetooth"
+
+errors:
+  "01": "Invalid Payload"

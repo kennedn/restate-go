@@ -1,25 +1,37 @@
 codes:
-- code: power
-  method: PUT
-  httpCode: 200
-  json: '{"status": "ok"}'
-- code: status
-  method: PUT
-  httpCode: 200
-  json: '{"onoff": "on", "input": "aux"}'
-- code: ""
-  method: GET
-  httpCode: 200
-  json: '{"code": ["status", "power", "mute", "volume_up", "volume_down", "previous", "next", "play_pause", "input", "treble_up", "treble_down", "bass_up", "bass_down", "pair", "flat", "music", "dialog", "movie"]}'
-- code: monkey
-  method: PUT
-  httpCode: 400
-  json: '{"message": "code not recognised"}'
-- code: test
-  method: POST
-  httpCode: 500
-  json: '{"message": "HTTP method not supported"}'
-- code: error
-  method: PUT
-  httpCode: 500
-  json: '{"status": "ng"}'
+  - code: "807FFFFF"
+    response: "FFFFOK00"
+  - code: "807F807F"
+    response: "807FOK00"
+  - code: "807F40BF"
+    response: "40BFOK00"
+  - code: "807FCC33"
+    response: "CC33OK00"
+  - code: "807FC03F"
+    response: "C03FOK00"
+  - code: "807F10EF"
+    response: "10EFOK00"
+  - code: "807FA05F"
+    response: "A05FOK00"
+  - code: "807F609F"
+    response: "609FOK00"
+  - code: "807FE01F"
+    response: "E01FOK00"
+  - code: "807FA45B"
+    response: "A45BOK00"
+  - code: "807FE41B"
+    response: "E41BOK00"
+  - code: "807F20DF"
+    response: "20DFOK00"
+  - code: "807F649B"
+    response: "649BOK00"
+  - code: "807F906F"
+    response: "906FOK00"
+  - code: "807F48B7"
+    response: "48B7OK00"
+  - code: "807F946B"
+    response: "946BOK00"
+  - code: "807F54AB"
+    response: "54ABOK00"
+  - code: "807F14EB"
+    response: "14EBOK00"

@@ -11,15 +11,14 @@ import (
 
 	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
-	device "github.com/kennedn/restate-go/internal/device/common"
 
 	"github.com/gorilla/mux"
-	"github.com/gorilla/schema"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 )
 
-func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
+func setupWSServer(t *testing.T, serverConfigPath string) *httptest.Server {
 	serverConfigFile, err := os.ReadFile(serverConfigPath)
 	if err != nil {
 		t.Fatalf("Could not read serverConfigPath")
@@ -28,32 +27,44 @@ func setupHTTPServer(t *testing.T, serverConfigPath string) *httptest.Server {
 	serverConfig := struct {
 		Codes []struct {
 			Code     string `yaml:"code"`
-			Method   string `yaml:"method"`
-			HttpCode int    `yaml:"httpCode"`
-			Json     string `yaml:"json"`
-		}
+			Response string `yaml:"response"`
+		} `yaml:"codes"`
 	}{}
 
 	if err := yaml.Unmarshal(serverConfigFile, &serverConfig); err != nil {
 		t.Fatalf("Could not parse serverConfigPath")
 	}
 
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool { return true },
+	}
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := device.Request{}
-		if err := schema.NewDecoder().Decode(&request, r.URL.Query()); err != nil {
-			t.Fatalf("Could not parse query URL")
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Fatalf("Could not upgrade websocket connection: %v", err)
+		}
+		defer conn.Close()
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("Could not read websocket message: %v", err)
 		}
 
+		request := struct {
+			Code string
+		}{Code: string(msg)}
+
 		for _, s := range serverConfig.Codes {
-			if request.Code == s.Code && r.Method == s.Method {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(s.HttpCode)
-				w.Write([]byte(s.Json))
+			if request.Code == s.Code {
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(s.Response)); err != nil {
+					t.Fatalf("Could not write websocket message: %v", err)
+				}
 				return
 			}
 		}
 
-		t.Fatalf("No canned response found for input")
+		t.Fatalf("No canned websocket response found for input: %s", request.Code)
 	}))
 
 	return server
@@ -71,7 +82,7 @@ func TestRoutes(t *testing.T) {
 		{
 			name:          "default_config",
 			configPath:    "testdata/snowdonConfig/normal_config.yaml",
-			routeCount:    4,
+			routeCount:    6,
 			expectedError: nil,
 		},
 		{
@@ -95,38 +106,38 @@ func TestRoutes(t *testing.T) {
 		{
 			name:          "single_device_config",
 			configPath:    "testdata/snowdonConfig/single_device_config.yaml",
-			routeCount:    1,
+			routeCount:    2,
 			expectedError: nil,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			merossConfigFile, err := os.ReadFile(tc.configPath)
+			snowdonConfigFile, err := os.ReadFile(tc.configPath)
 			if err != nil {
 				t.Fatalf("Could not read config file")
 			}
 
-			merossConfig := config.Config{}
-
-			if err := yaml.Unmarshal(merossConfigFile, &merossConfig); err != nil {
+			snowdonConfig := config.Config{}
+			if err := yaml.Unmarshal(snowdonConfigFile, &snowdonConfig); err != nil {
 				t.Fatalf("Could not read config file")
 			}
+
 			device := &Device{}
-			r, err := device.Routes(&merossConfig)
+			r, err := device.Routes(&snowdonConfig)
 
 			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
 
 			if len(r) != tc.routeCount {
 				t.Fatalf("Wrong number of routes returned, Expected: %d, Got: %d", tc.routeCount, len(r))
 			}
-
 		})
 	}
 }
 
 func TestHandlers(t *testing.T) {
 	logging.SetLogLevel(logging.Error)
+
 	testCases := []struct {
 		name          string
 		method        string
@@ -145,7 +156,7 @@ func TestHandlers(t *testing.T) {
 			serverConfig:  "testdata/serverConfig/normal_responses.yaml",
 			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
 			expectedCode:  200,
-			expectedBody:  `{"message":"OK","data":{"onoff":"on","input":"aux"}}`,
+			expectedBody:  `{"message":"OK","data":"aux"}`,
 		},
 		{
 			name:          "power_no_error",
@@ -165,7 +176,7 @@ func TestHandlers(t *testing.T) {
 			serverConfig:  "testdata/serverConfig/normal_responses.yaml",
 			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
 			expectedCode:  200,
-			expectedBody:  `{"message":"OK","data":["status","power","mute","volume_up","volume_down","previous","next","play_pause","input","treble_up","treble_down","bass_up","bass_down","pair","flat","music","dialog","movie"]}`,
+			expectedBody:  `{"message":"OK","data":["bass_down","bass_up","dialog","flat","input","movie","music","mute","next","pair","play_pause","power","previous","status","treble_down","treble_up","volume_down","volume_up"]}`,
 		},
 		{
 			name:          "get_base_request",
@@ -235,14 +246,34 @@ func TestHandlers(t *testing.T) {
 			serverConfig:  "testdata/serverConfig/normal_responses.yaml",
 			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
 			expectedCode:  400,
-			expectedBody:  `{"message":"Code Not Recognised"}`,
+			expectedBody:  `{"message":"Invalid Parameter: code"}`,
 		},
 		{
-			name:          "snowdon_internal_500_error",
+			name:          "device_returns_invalid_payload",
 			method:        "POST",
-			url:           "/snowdon/test1?code=error",
+			url:           "/snowdon/test1?code=power",
 			data:          nil,
-			serverConfig:  "testdata/serverConfig/normal_responses.yaml",
+			serverConfig:  "testdata/serverConfig/invalid_payload_response.yaml",
+			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
+			expectedCode:  500,
+			expectedBody:  `{"message":"Internal Server Error"}`,
+		},
+		{
+			name:          "device_returns_ng_status",
+			method:        "POST",
+			url:           "/snowdon/test1?code=power",
+			data:          nil,
+			serverConfig:  "testdata/serverConfig/ng_response.yaml",
+			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
+			expectedCode:  500,
+			expectedBody:  `{"message":"Internal Server Error"}`,
+		},
+		{
+			name:          "status_unknown_mapping",
+			method:        "POST",
+			url:           "/snowdon/test1?code=status",
+			data:          nil,
+			serverConfig:  "testdata/serverConfig/unknown_status_response.yaml",
 			snowdonConfig: "testdata/snowdonConfig/normal_config.yaml",
 			expectedCode:  500,
 			expectedBody:  `{"message":"Internal Server Error"}`,
@@ -257,27 +288,27 @@ func TestHandlers(t *testing.T) {
 			}
 
 			snowdonConfig := config.Config{}
-
 			if err := yaml.Unmarshal(snowdonConfigFile, &snowdonConfig); err != nil {
 				t.Fatalf("Could not read snowdon input")
 			}
 
-			base, routes, err := routes(&snowdonConfig)
-
+			base, routes, err := routes(&snowdonConfig, nil)
 			if err != nil {
 				t.Fatalf("routes returned an error: %v", err)
 			}
+
 			router := mux.NewRouter()
 			for _, r := range routes {
 				router.HandleFunc(r.Path, r.Handler)
 			}
-			server := setupHTTPServer(t, tc.serverConfig)
+
+			server := setupWSServer(t, tc.serverConfig)
 			for i := range base.Devices {
 				base.Devices[i].Host = strings.TrimPrefix(server.URL, "http://")
 			}
 			defer server.Close()
-			recorder := httptest.NewRecorder()
 
+			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
 			if tc.data != nil {
 				request.Header.Set("Content-Type", "application/json")
