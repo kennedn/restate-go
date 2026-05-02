@@ -15,6 +15,7 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
+	msh "github.com/kennedn/restate-go/internal/device/meross/msh300hk"
 	"gopkg.in/yaml.v3"
 )
 
@@ -282,6 +283,9 @@ func (l *listener) startThermostatSyncStalenessCheck() {
 				}
 				l.thermostatSync()
 			}
+
+			// Also check and process any expired heating overrides each tick
+			l.processExpiredOverrides()
 		}
 	}()
 }
@@ -589,6 +593,29 @@ func (l *listener) setEveryRadiatorMode(value int64) (int, error) {
 	}
 
 	return httpStatus, nil
+}
+
+// processExpiredOverrides reads the shared heating-overrides file, reverts any
+// expired overrides back to mode 3 on the radiator bridge, and persists the
+// cleaned file. Errors are logged but not returned to callers.
+func (l *listener) processExpiredOverrides() {
+	ids, err := msh.GetAndClearExpiredHeatingOverrides()
+	if err != nil {
+		logging.Log(logging.Error, "Failed to read/clear heating overrides: %v", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	hosts := strings.Join(ids, ",")
+	_, httpStatus, err := l.post(l.Config.Radiator.URL, map[string]string{"hosts": hosts, "code": "mode", "value": fmt.Sprintf("%d", 3)})
+	if err != nil || httpStatus != 200 {
+		logging.Log(logging.Error, "Failed to revert expired overrides for %v: %v (HTTP %d)", ids, err, httpStatus)
+		return
+	}
+
+	logging.Log(logging.Info, "Reverted %d expired heating overrides", len(ids))
 }
 
 // setThermostatHeat sets the thermostat heat temperature for a given ID and value.

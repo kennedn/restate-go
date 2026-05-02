@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sort"
 	"strconv"
 	"strings"
@@ -51,6 +52,7 @@ type CodeValueRequest struct {
 }
 
 var heatingOverridesPath = "/tmp/state/heating-overrides.json"
+var heatingOverridesMu sync.Mutex
 
 type heatingOverrideFile struct {
 	Boost map[string]string `json:"boost"`
@@ -71,10 +73,74 @@ func collectTargets(devices []*meross) []string {
 	return targets
 }
 
+// SetHeatingOverridesPath allows tests to override the default path used
+// for storing heating override state.
+func SetHeatingOverridesPath(p string) {
+	heatingOverridesPath = p
+}
+
+// GetAndClearExpiredHeatingOverrides reads the heating overrides file, removes
+// any expired entries, persists the file if changes were made, and returns
+// the list of device IDs that were expired.
+func GetAndClearExpiredHeatingOverrides() ([]string, error) {
+	heatingOverridesMu.Lock()
+	defer heatingOverridesMu.Unlock()
+
+	payload := heatingOverrideFile{Boost: map[string]string{}}
+
+	// read existing file if present
+	if existing, err := os.ReadFile(heatingOverridesPath); err == nil && len(existing) > 0 {
+		if err := json.Unmarshal(existing, &payload); err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now().UTC()
+	expired := make([]string, 0)
+	changed := false
+
+	for id, expiresStr := range payload.Boost {
+		if expiresStr == "" {
+			continue
+		}
+		expires, err := time.Parse(time.RFC3339, expiresStr)
+		if err != nil {
+			// If parse fails, treat as expired and remove
+			expired = append(expired, id)
+			delete(payload.Boost, id)
+			changed = true
+			continue
+		}
+		if !expires.After(now) {
+			expired = append(expired, id)
+			delete(payload.Boost, id)
+			changed = true
+		}
+	}
+
+	if changed {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(heatingOverridesPath), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(heatingOverridesPath, data, 0o644); err != nil {
+			return nil, err
+		}
+	}
+
+	return expired, nil
+}
+
 func writeHeatingOverrides(targets []string, expires time.Time) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("no targets provided")
 	}
+
+	heatingOverridesMu.Lock()
+	defer heatingOverridesMu.Unlock()
 
 	dirPath := filepath.Dir(heatingOverridesPath)
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
@@ -101,6 +167,11 @@ func writeHeatingOverrides(targets []string, expires time.Time) error {
 	}
 
 	return os.WriteFile(heatingOverridesPath, data, 0o644)
+}
+
+// AddHeatingOverrides is an exported helper that appends/sets overrides atomically.
+func AddHeatingOverrides(targets []string, expires time.Time) error {
+	return writeHeatingOverrides(targets, expires)
 }
 
 // StatusHandler: GET-only, returns flattened status.
