@@ -21,6 +21,8 @@ spec:
           subPath: config.yaml
         - name: restate-go-cache-volume
           mountPath: /tmp/cache
+        - name: restate-go-state-volume
+          mountPath: /tmp/state
       volumes:
       - name: restate-go-config-volume
         secret:
@@ -29,3 +31,6 @@ spec:
       - name: restate-go-cache-volume
         persistentVolumeClaim:
           claimName: restate-go-cache
+      - name: restate-go-state-volume
+        persistentVolumeClaim:
+          claimName: restate-go-state
