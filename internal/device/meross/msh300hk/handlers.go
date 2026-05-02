@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ---------------------------
@@ -27,6 +31,8 @@ func (b *base) wireHandlers() {
 			ep.Handler = ModeHandler{Min: 0, Max: 4} // adjust range if your devices differ
 		case "adjust":
 			ep.Handler = AdjustHandler{Min: -32767, Max: 32767} // typical TRV target range
+		case "boost":
+			ep.Handler = BoostHandler{}
 		default:
 			log.Fatalf("Unhandled endpoint code '%s' in msh300hk device", ep.Code)
 		}
@@ -42,6 +48,59 @@ type CodeValueRequest struct {
 	Code  string      `json:"code" schema:"code"`
 	Value json.Number `json:"value,omitempty" schema:"value"`
 	Hosts string      `json:"hosts,omitempty" schema:"hosts"`
+}
+
+var heatingOverridesPath = "/tmp/state/heating-overrides.json"
+
+type heatingOverrideFile struct {
+	Boost map[string]string `json:"boost"`
+}
+
+func collectTargets(devices []*meross) []string {
+	seen := make(map[string]struct{})
+	targets := make([]string, 0)
+	for _, device := range devices {
+		for _, id := range device.Ids {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			targets = append(targets, id)
+		}
+	}
+	return targets
+}
+
+func writeHeatingOverrides(targets []string, expires time.Time) error {
+	if len(targets) == 0 {
+		return fmt.Errorf("no targets provided")
+	}
+
+	dirPath := filepath.Dir(heatingOverridesPath)
+	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+		return err
+	}
+
+	payload := heatingOverrideFile{Boost: map[string]string{}}
+	if existing, err := os.ReadFile(heatingOverridesPath); err == nil && len(existing) > 0 {
+		if err := json.Unmarshal(existing, &payload); err != nil {
+			return err
+		}
+		if payload.Boost == nil {
+			payload.Boost = map[string]string{}
+		}
+	}
+
+	for _, target := range targets {
+		payload.Boost[target] = expires.UTC().Format(time.RFC3339)
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(heatingOverridesPath, data, 0o644)
 }
 
 // StatusHandler: GET-only, returns flattened status.
@@ -542,4 +601,84 @@ func (h AdjustHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// BoostHandler: set mode 4, then persist a heating override with the requested duration.
+type BoostHandler struct{}
+
+func (h BoostHandler) validate(v json.Number) (time.Duration, error) {
+	if v == "" {
+		return 0, fmt.Errorf("invalid value (expected hours)")
+	}
+
+	hours, err := strconv.ParseFloat(string(v), 64)
+	if err != nil || hours <= 0 {
+		return 0, fmt.Errorf("invalid value (expected hours)")
+	}
+
+	return time.Duration(hours * float64(time.Hour)), nil
+}
+
+func (h BoostHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
+	req := CodeValueRequest{}
+	if err := decodeRequest(r, &req); err != nil {
+		return nil, err
+	}
+
+	duration, err := h.validate(req.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	ep := m.getEndpoint("mode")
+	if ep == nil {
+		return nil, fmt.Errorf("invalid code")
+	}
+
+	payload := m.buildPayload(ep.Template, toJsonNumber(4))
+	if _, err := m.post("SET", ep.Namespace, payload); err != nil {
+		return nil, err
+	}
+
+	if err := writeHeatingOverrides(collectTargets([]*meross{m}), time.Now().Add(duration)); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (h BoostHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (any, error) {
+	req := CodeValueRequest{}
+	if err := decodeRequest(r, &req); err != nil {
+		return nil, err
+	}
+
+	duration, err := h.validate(req.Value)
+	if err != nil {
+		return nil, err
+	}
+
+	m0 := devices[0]
+	ep := m0.getEndpoint("mode")
+	if ep == nil {
+		return nil, fmt.Errorf("invalid code")
+	}
+
+	var payload strings.Builder
+	for i, m := range devices {
+		payload.WriteString(m.buildPayload(ep.Template, toJsonNumber(4)))
+		if i < len(devices)-1 {
+			payload.WriteString(",")
+		}
+	}
+
+	if _, err := b.post(m0.Host, "SET", ep.Namespace, payload.String(), m0.Key, m0.Timeout); err != nil {
+		return nil, err
+	}
+
+	if err := writeHeatingOverrides(collectTargets(devices), time.Now().Add(duration)); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }

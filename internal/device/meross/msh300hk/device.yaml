@@ -21,6 +21,12 @@ endpoints:
   maxValue: 32767
   namespace: Appliance.Hub.Mts100.Adjust
   template: '{"id":"%s","temperature":%s}'
+- code: boost
+  supportedDevices: 
+  - radiator
+  minValue: 1
+  namespace: Appliance.Hub.Mts100.Mode
+  template: '{"id":"%s","state":4}'
 - code: status
   supportedDevices: 
   - radiator

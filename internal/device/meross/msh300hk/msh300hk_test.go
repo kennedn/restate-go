@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kennedn/restate-go/internal/common/config"
 	"github.com/kennedn/restate-go/internal/common/logging"
@@ -138,6 +140,21 @@ func TestRoutes(t *testing.T) {
 func TestHandlers(t *testing.T) {
 	logging.SetLogLevel(logging.Error)
 
+	// Create a temporary file for testing
+	tmpFile, err := os.CreateTemp("", "heating-overrides-*.json")
+	if err != nil {
+		t.Fatalf("Failed to create temporary file: %v", err)
+	}
+	tmpFile.Close()
+	defer os.Remove(tmpFile.Name())
+
+	// Override the heating overrides path for testing
+	originalPath := heatingOverridesPath
+	heatingOverridesPath = tmpFile.Name()
+	t.Cleanup(func() {
+		heatingOverridesPath = originalPath
+	})
+
 	cfg := config.Config{}
 	if err := yaml.Unmarshal([]byte(normalRadiatorConfig), &cfg); err != nil {
 		t.Fatalf("Could not unmarshal meross config")
@@ -173,7 +190,7 @@ func TestHandlers(t *testing.T) {
 			url:          "/radiator/",
 			data:         nil,
 			expectedCode: http.StatusOK,
-			expectedBody: `{"message":"OK","data":["dev1","dev2","dev3","rad1","rad2"]}`,
+			expectedBody: `{"message":"OK","data":["rad1","rad2","dev1","dev2","dev3"]}`,
 		},
 		{
 			name:         "get_codes",
@@ -181,7 +198,7 @@ func TestHandlers(t *testing.T) {
 			url:          "/radiator/rad1",
 			data:         nil,
 			expectedCode: http.StatusOK,
-			expectedBody: `{"message":"OK","data":["toggle","mode","adjust","status","battery"]}`,
+			expectedBody: `{"message":"OK","data":["toggle","mode","adjust","boost","status","battery"]}`,
 		},
 		{
 			name:         "invalid_method",
@@ -264,6 +281,22 @@ func TestHandlers(t *testing.T) {
 			expectedBody: `{"message":"OK"}`,
 		},
 		{
+			name:         "boost_success",
+			method:       http.MethodPost,
+			url:          "/radiator/rad1?code=boost&value=2",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK"}`,
+		},
+		{
+			name:         "multi_boost_success",
+			method:       http.MethodPost,
+			url:          "/radiator?hosts=rad1,rad2&code=boost&value=2",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: `{"message":"OK"}`,
+		},
+		{
 			name:         "multi_invalid_hosts",
 			method:       http.MethodPost,
 			url:          "/radiator/?code=status",
@@ -324,6 +357,39 @@ func TestHandlers(t *testing.T) {
 				assert.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 				assert.ElementsMatch(t, []string{"rad1", "rad2", "dev1", "dev2", "dev3"}, response.Data)
 				return
+			}
+
+			if tc.name == "boost_success" || tc.name == "multi_boost_success" {
+				raw, err := os.ReadFile(tmpFile.Name())
+				assert.NoError(t, err)
+
+				response := struct {
+					Boost map[string]string `json:"boost"`
+				}{}
+				assert.NoError(t, json.Unmarshal(raw, &response))
+				if tc.name == "boost_success" {
+					if assert.Len(t, response.Boost, 2) {
+						for _, id := range []string{"dev1", "dev2"} {
+							expiresStr, ok := response.Boost[id]
+							if assert.True(t, ok, "missing override for %s", id) {
+								expires, err := time.Parse(time.RFC3339, expiresStr)
+								assert.NoError(t, err)
+								assert.WithinDuration(t, time.Now().Add(2*time.Hour), expires, time.Minute)
+							}
+						}
+					}
+				} else {
+					if assert.Len(t, response.Boost, 3) {
+						for _, id := range []string{"dev1", "dev2", "dev3"} {
+							expiresStr, ok := response.Boost[id]
+							if assert.True(t, ok, "missing override for %s", id) {
+								expires, err := time.Parse(time.RFC3339, expiresStr)
+								assert.NoError(t, err)
+								assert.WithinDuration(t, time.Now().Add(2*time.Hour), expires, time.Minute)
+							}
+						}
+					}
+				}
 			}
 
 			assert.Equal(t, tc.expectedBody, recorder.Body.String())

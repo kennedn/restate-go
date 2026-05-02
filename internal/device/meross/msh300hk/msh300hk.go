@@ -430,7 +430,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	result, err := ep.Handler.HandleSingle(m, r)
 	if err != nil {
 		logging.Log(logging.Error, err.Error())
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, err.Error(), nil)
 		return
 	}
 
@@ -553,7 +553,7 @@ DUPLICATE_DEVICE:
 	result, err := ep.Handler.HandleMulti(b, devices, r)
 	if err != nil {
 		logging.Log(logging.Error, err.Error())
-		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, "Internal Server Error", nil)
+		httpCode, jsonResponse = device.SetJSONResponse(http.StatusInternalServerError, err.Error(), nil)
 		return
 	}
 
