@@ -269,8 +269,6 @@ func routes(config *config.Config, internalConfigOverride *[]byte) (*base, []rou
 	if len(routes) == 0 {
 		return nil, []router.Route{}, errors.New("no routes found in config")
 	} else if len(routes) == 1 {
-		// register revert receiver for expired heating overrides
-		revertReceiver = &base
 		return &base, routes, nil
 	}
 
@@ -287,67 +285,7 @@ func routes(config *config.Config, internalConfigOverride *[]byte) (*base, []rou
 		Handler: base.handler,
 	})
 
-	// register revert receiver for expired heating overrides
-	revertReceiver = &base
 	return &base, routes, nil
-}
-
-// RevertExpiredHeatingOverridesMode3 reverts expired boost entries by sending
-// mode 3 commands through the relevant Meross device receivers.
-func (b *base) RevertExpiredHeatingOverridesMode3(ids []string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-
-	grouped := map[*meross][]string{}
-	for _, id := range ids {
-		dev := b.getDeviceById(id)
-		if dev == nil {
-			continue
-		}
-		grouped[dev] = append(grouped[dev], id)
-	}
-
-	for dev, devIDs := range grouped {
-		ep := dev.getEndpoint("mode")
-		if ep == nil {
-			return fmt.Errorf("invalid code")
-		}
-
-		var payload strings.Builder
-		for i, id := range devIDs {
-			payload.WriteString(fmt.Sprintf(ep.Template, id, string(toJsonNumber(3))))
-			if i < len(devIDs)-1 {
-				payload.WriteString(",")
-			}
-		}
-
-		if overrideRevertHost != "" {
-			// Post a simple JSON payload to the override URL (used by tests).
-			body := fmt.Sprintf(`{"hosts":"%s","code":"mode","value":"3"}`, strings.Join(devIDs, ","))
-			client := &http.Client{Timeout: time.Duration(dev.Timeout) * time.Millisecond}
-			req, err := http.NewRequest(http.MethodPost, overrideRevertHost, bytes.NewReader([]byte(body)))
-			if err != nil {
-				return err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := client.Do(req)
-			if err != nil {
-				return err
-			}
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("unexpected status %d", resp.StatusCode)
-			}
-		} else {
-			host := dev.Host
-			if _, err := b.post(host, "SET", ep.Namespace, payload.String(), dev.Key, dev.Timeout); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }
 
 // getCodes returns a list of control codes for a Meross device.

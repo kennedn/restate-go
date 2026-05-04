@@ -1,7 +1,6 @@
 package msh300hk
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -34,7 +33,7 @@ func (b *base) wireHandlers() {
 		case "adjust":
 			ep.Handler = AdjustHandler{Min: -32767, Max: 32767} // typical TRV target range
 		case "boost":
-			ep.Handler = BoostHandler{}
+			ep.Handler = BoostHandler{Base: b}
 		case "heatTemp":
 			ep.Handler = HeatTempHandler{Min: 50, Max: 350}
 		default:
@@ -61,18 +60,16 @@ type heatingOverrideFile struct {
 	Boost map[string]string `json:"boost"`
 }
 
-// revertReceiver is used by GetAndClearExpiredHeatingOverrides to execute
-// the actual mode-3 revert. It is set by routes() when the base is created.
-var revertReceiver *base
+// GetHeatingOverridesPath returns the current path for the heating overrides file.
+func GetHeatingOverridesPath() string {
+	return heatingOverridesPath
+}
 
-// overrideRevertHost, when set, forces RevertExpiredHeatingOverridesMode3 to
-// post to this host instead of the device's configured Host (used by tests).
-var overrideRevertHost string
-
-// SetHeatingOverridesRevertHost sets a host URL to be used for revert posts
-// instead of using the device Host. Accepts full URL (with scheme).
-func SetHeatingOverridesRevertHost(url string) {
-	overrideRevertHost = url
+// WithHeatingOverridesLock runs fn while holding the heating overrides mutex.
+func WithHeatingOverridesLock(fn func() error) error {
+	heatingOverridesMu.Lock()
+	defer heatingOverridesMu.Unlock()
+	return fn()
 }
 
 func collectTargets(devices []*meross) []string {
@@ -94,79 +91,6 @@ func collectTargets(devices []*meross) []string {
 // for storing heating override state.
 func SetHeatingOverridesPath(p string) {
 	heatingOverridesPath = p
-}
-
-// GetAndClearExpiredHeatingOverrides reads the heating overrides file, removes
-// any expired entries, persists the file if changes were made, and then
-// reverts expired devices back to mode 3 using the configured callback.
-func GetAndClearExpiredHeatingOverrides() error {
-	heatingOverridesMu.Lock()
-	defer heatingOverridesMu.Unlock()
-
-	payload := heatingOverrideFile{Boost: map[string]string{}}
-
-	// read existing file if present
-	if existing, readErr := os.ReadFile(heatingOverridesPath); readErr == nil && len(existing) > 0 {
-		if err := json.Unmarshal(existing, &payload); err != nil {
-			return err
-		}
-	}
-
-	now := time.Now().UTC()
-	expired := make([]string, 0)
-	changed := false
-
-	for id, expiresStr := range payload.Boost {
-		if expiresStr == "" {
-			continue
-		}
-		expires, err := time.Parse(time.RFC3339, expiresStr)
-		if err != nil || !expires.After(now) {
-			expired = append(expired, id)
-			delete(payload.Boost, id)
-			changed = true
-		}
-	}
-
-	if changed {
-		data, err := json.Marshal(payload)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(heatingOverridesPath), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(heatingOverridesPath, data, 0o644); err != nil {
-			return err
-		}
-	}
-
-	if len(expired) > 0 {
-		if revertReceiver != nil {
-			if err := revertReceiver.RevertExpiredHeatingOverridesMode3(expired); err != nil {
-				return err
-			}
-		} else if overrideRevertHost != "" {
-			// Fallback: post directly to overrideRevertHost with a simple JSON payload.
-			body := fmt.Sprintf(`{"hosts":"%s","code":"mode","value":"3"}`, strings.Join(expired, ","))
-			client := &http.Client{Timeout: 5 * time.Second}
-			req, err := http.NewRequest(http.MethodPost, overrideRevertHost, bytes.NewReader([]byte(body)))
-			if err != nil {
-				return err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := client.Do(req)
-			if err != nil {
-				return err
-			}
-			resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				return fmt.Errorf("unexpected status %d", resp.StatusCode)
-			}
-		}
-	}
-
-	return nil
 }
 
 func writeHeatingOverrides(targets []string, expires time.Time) error {
@@ -864,7 +788,9 @@ func (h AdjustHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 }
 
 // BoostHandler: set mode 4, then persist a heating override with the requested duration.
-type BoostHandler struct{}
+type BoostHandler struct {
+	Base *base
+}
 
 func (h BoostHandler) validate(v json.Number) (time.Duration, error) {
 	if v == "" {
@@ -901,15 +827,8 @@ func (h BoostHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 	}
 
 	targets := collectTargets([]*meross{m})
-	if err := writeHeatingOverrides(targets, time.Now().Add(duration)); err != nil {
+	if err := h.writeHeatingOverrides(targets, time.Now().Add(duration)); err != nil {
 		return nil, err
-	}
-
-	// If duration == 0 expire immediately
-	if duration == 0 {
-		if err := GetAndClearExpiredHeatingOverrides(); err != nil {
-			return nil, err
-		}
 	}
 
 	return nil, nil
@@ -945,15 +864,98 @@ func (h BoostHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (
 	}
 
 	targets := collectTargets(devices)
-	if err := writeHeatingOverrides(targets, time.Now().Add(duration)); err != nil {
+	if err := h.writeHeatingOverrides(targets, time.Now().Add(duration)); err != nil {
 		return nil, err
 	}
 
-	if duration == 0 {
-		if err := GetAndClearExpiredHeatingOverrides(); err != nil {
-			return nil, err
+	return nil, nil
+}
+
+func (h BoostHandler) writeHeatingOverrides(targets []string, expires time.Time) error {
+	if err := writeHeatingOverrides(targets, expires); err != nil {
+		return err
+	}
+	return h.clearExpiredHeatingOverrides()
+}
+
+func (h BoostHandler) clearExpiredHeatingOverrides() error {
+	return WithHeatingOverridesLock(func() error {
+		path := GetHeatingOverridesPath()
+		payload := heatingOverrideFile{Boost: map[string]string{}}
+		if existing, readErr := os.ReadFile(path); readErr == nil && len(existing) > 0 {
+			if err := json.Unmarshal(existing, &payload); err != nil {
+				return err
+			}
+		}
+
+		now := time.Now().UTC()
+		expired := make([]string, 0)
+		changed := false
+		for id, expiresStr := range payload.Boost {
+			if expiresStr == "" {
+				continue
+			}
+			expiresAt, err := time.Parse(time.RFC3339, expiresStr)
+			if err != nil || !expiresAt.After(now) {
+				expired = append(expired, id)
+				delete(payload.Boost, id)
+				changed = true
+			}
+		}
+
+		if changed {
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				return err
+			}
+		}
+
+		if len(expired) > 0 {
+			return h.revertExpiredHeatingOverridesMode3(expired)
+		}
+
+		return nil
+	})
+}
+
+func (h BoostHandler) revertExpiredHeatingOverridesMode3(ids []string) error {
+	if len(ids) == 0 || h.Base == nil {
+		return nil
+	}
+
+	grouped := map[*meross][]string{}
+	for _, id := range ids {
+		dev := h.Base.getDeviceById(id)
+		if dev == nil {
+			continue
+		}
+		grouped[dev] = append(grouped[dev], id)
+	}
+
+	for dev, devIDs := range grouped {
+		ep := dev.getEndpoint("mode")
+		if ep == nil {
+			return fmt.Errorf("invalid code")
+		}
+
+		var payload strings.Builder
+		for i, id := range devIDs {
+			payload.WriteString(fmt.Sprintf(ep.Template, id, string(toJsonNumber(3))))
+			if i < len(devIDs)-1 {
+				payload.WriteString(",")
+			}
+		}
+
+		if _, err := h.Base.post(dev.Host, "SET", ep.Namespace, payload.String(), dev.Key, dev.Timeout); err != nil {
+			return err
 		}
 	}
 
-	return nil, nil
+	return nil
 }

@@ -55,10 +55,6 @@ func TestProcessExpiredOverrides(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// ensure msh posts go to our mock server
-	msh.SetHeatingOverridesRevertHost(server.URL)
-	defer msh.SetHeatingOverridesRevertHost("")
-
 	// build config with radiator/thermostat entries
 	cfg := config.Config{}
 	// bthome device (name rad1)

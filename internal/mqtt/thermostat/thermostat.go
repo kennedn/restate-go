@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -599,12 +601,90 @@ func (l *listener) setEveryRadiatorMode(value int64) (int, error) {
 // expired overrides back to mode 3 on the radiator bridge, and persists the
 // cleaned file. Errors are logged but not returned to callers.
 func (l *listener) processExpiredOverrides() {
-	if err := msh.GetAndClearExpiredHeatingOverrides(); err != nil {
+	if err := l.GetAndClearExpiredHeatingOverrides(); err != nil {
 		logging.Log(logging.Error, "Failed to read/clear heating overrides: %v", err)
 		return
 	}
 
 	logging.Log(logging.Info, "Reverted expired heating overrides")
+}
+
+func (l *listener) GetAndClearExpiredHeatingOverrides() error {
+	if l == nil || l.Config == nil {
+		return nil
+	}
+
+	expired := make([]string, 0)
+	err := msh.WithHeatingOverridesLock(func() error {
+		path := msh.GetHeatingOverridesPath()
+		payload := struct {
+			Boost map[string]string `json:"boost"`
+		}{Boost: map[string]string{}}
+
+		if existing, readErr := os.ReadFile(path); readErr == nil && len(existing) > 0 {
+			if err := json.Unmarshal(existing, &payload); err != nil {
+				return err
+			}
+		}
+
+		now := time.Now().UTC()
+		changed := false
+		for id, expiresStr := range payload.Boost {
+			if expiresStr == "" {
+				continue
+			}
+			expiresAt, err := time.Parse(time.RFC3339, expiresStr)
+			if err != nil || !expiresAt.After(now) {
+				expired = append(expired, id)
+				delete(payload.Boost, id)
+				changed = true
+			}
+		}
+
+		if changed {
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(expired) == 0 {
+		return nil
+	}
+
+	return l.revertExpiredHeatingOverridesMode3(expired)
+}
+
+func (l *listener) revertExpiredHeatingOverridesMode3(ids []string) error {
+	if len(ids) == 0 || l == nil || l.Config == nil || l.Config.Radiator.URL == "" {
+		return nil
+	}
+
+	_, httpStatus, err := l.post(l.Config.Radiator.URL, map[string]string{
+		"hosts": strings.Join(ids, ","),
+		"code":  "mode",
+		"value": "3",
+	})
+	if err != nil {
+		return err
+	}
+	if httpStatus != http.StatusOK {
+		return fmt.Errorf("unexpected status %d", httpStatus)
+	}
+
+	return nil
 }
 
 // setThermostatHeat sets the thermostat heat temperature for a given ID and value.
