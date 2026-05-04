@@ -37,3 +37,10 @@ endpoints:
   - radiator
   namespace: Appliance.Hub.Battery
   template: '{"id":"%s","dummy":%s}'
+- code: heatTemp
+  supportedDevices: 
+  - radiator
+  minValue: 50
+  maxValue: 350
+  namespace: Appliance.Hub.Mts100.Temperature
+  template: '{"id": "%s","away":%s}'

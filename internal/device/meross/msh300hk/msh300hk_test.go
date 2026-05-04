@@ -198,7 +198,7 @@ func TestHandlers(t *testing.T) {
 			url:          "/radiator/rad1",
 			data:         nil,
 			expectedCode: http.StatusOK,
-			expectedBody: `{"message":"OK","data":["toggle","mode","adjust","boost","status","battery"]}`,
+			expectedBody: `{"message":"OK","data":["toggle","mode","adjust","boost","status","battery","heatTemp"]}`,
 		},
 		{
 			name:         "invalid_method",
@@ -336,10 +336,21 @@ func TestHandlers(t *testing.T) {
 			expectedCode: http.StatusOK,
 			expectedBody: `{"message":"OK","data":[{"name":"rad1","status":{"id":"dev1","value":95}},{"name":"rad1","status":{"id":"dev2","value":85}},{"name":"rad2","status":{"id":"dev3","value":80}}]}`,
 		},
+		{
+			name:         "status_no_boost_omitempty",
+			method:       http.MethodPost,
+			url:          "/radiator/rad1?code=status",
+			data:         nil,
+			expectedCode: http.StatusOK,
+			expectedBody: "",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// Clear the heating overrides file between tests to avoid cross-test pollution
+			os.WriteFile(tmpFile.Name(), []byte{}, 0644)
+
 			recorder := httptest.NewRecorder()
 			req := httptest.NewRequest(tc.method, tc.url, bytes.NewReader(tc.data))
 			if tc.data != nil {
@@ -390,6 +401,27 @@ func TestHandlers(t *testing.T) {
 						}
 					}
 				}
+			}
+
+			// For status_no_boost_omitempty, verify that boost key is completely absent
+			if tc.name == "status_no_boost_omitempty" {
+				var parsed map[string]any
+				if err := json.Unmarshal(recorder.Body.Bytes(), &parsed); err != nil {
+					t.Fatalf("failed to parse response JSON: %v", err)
+				}
+				data, ok := parsed["data"]
+				assert.True(t, ok, "response should have 'data' field")
+				if dataList, ok := data.([]any); ok {
+					assert.True(t, len(dataList) > 0, "data should not be empty")
+					if item, ok := dataList[0].(map[string]any); ok {
+						if temp, ok := item["temperature"].(map[string]any); ok {
+							// Verify boost key is completely absent (omitempty working)
+							_, boostExists := temp["boost"]
+							assert.False(t, boostExists, "boost key should not exist in JSON when no override is present (omitempty should exclude it)")
+						}
+					}
+				}
+				return
 			}
 
 			assert.Equal(t, tc.expectedBody, recorder.Body.String())
