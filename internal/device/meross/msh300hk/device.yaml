@@ -27,6 +27,12 @@ endpoints:
   minValue: 1
   namespace: Appliance.Hub.Mts100.Mode
   template: '{"id":"%s","state":4}'
+- code: schedule
+  supportedDevices:
+  - radiator
+  namespace: Appliance.Hub.Mts100.ScheduleB
+  payloadName: schedule
+  template: '{"id":"%s",%s}'
 - code: status
   supportedDevices: 
   - radiator

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -39,6 +40,7 @@ type statusGet struct {
 	Mode        *int64       `json:"mode,omitempty"`
 	Online      *int64       `json:"online,omitempty"`
 	Temperature *temperature `json:"temperature,omitempty"`
+	Schedule    *string      `json:"schedule,omitempty"`
 }
 
 type singleGet struct {
@@ -102,8 +104,13 @@ type rawStatus struct {
 			ID          string `json:"id"`
 			Temperature int64  `json:"temperature"`
 		} `json:"adjust"`
+
+		Schedule []map[string]any `json:"schedule,omitempty"`
 	} `json:"payload"`
 }
+
+// For schedule GET responses we expect entries under payload.schedule
+type rawScheduleEntry map[string]any
 
 // Handler defines per-endpoint behavior for single-device and multi-device requests.
 // Handlers receive the raw *http.Request so they can decode bespoke request shapes and validate independently.
@@ -119,19 +126,34 @@ type endpoint struct {
 	SupportedDevices []string `yaml:"supportedDevices"`
 	Namespace        string   `yaml:"namespace"`
 	Template         string   `yaml:"template"`
+	PayloadName      string   `yaml:"payloadName,omitempty"`
 
 	Handler Handler `yaml:"-"`
 }
 
 // meross represents a Meross device configuration.
 type meross struct {
-	Name       string   `yaml:"name"`
-	Ids        []string `yaml:"ids"`
-	Host       string   `yaml:"host"`
-	DeviceType string   `yaml:"deviceType"`
-	Timeout    uint     `yaml:"timeoutMs"`
-	Key        string   `yaml:"key,omitempty"`
+	Name       string           `yaml:"name"`
+	Ids        []string         `yaml:"ids"`
+	Host       string           `yaml:"host"`
+	DeviceType string           `yaml:"deviceType"`
+	Timeout    uint             `yaml:"timeoutMs"`
+	Key        string           `yaml:"key,omitempty"`
+	Schedules  []schedulePreset `yaml:"schedules,omitempty"`
 	Base       base
+}
+
+// schedulePreset represents a named schedule selection configured per radiator.
+type schedulePreset struct {
+	ID   string    `yaml:"-" json:"id,omitempty"`
+	Name string    `yaml:"name" json:"name,omitempty"`
+	Mon  [][]int64 `yaml:"mon" json:"mon,omitempty"`
+	Tue  [][]int64 `yaml:"tue" json:"tue,omitempty"`
+	Wed  [][]int64 `yaml:"wed" json:"wed,omitempty"`
+	Thu  [][]int64 `yaml:"thu" json:"thu,omitempty"`
+	Fri  [][]int64 `yaml:"fri" json:"fri,omitempty"`
+	Sat  [][]int64 `yaml:"sat" json:"sat,omitempty"`
+	Sun  [][]int64 `yaml:"sun" json:"sun,omitempty"`
 }
 
 // base represents a list of Meross devices, endpoints and common configuration.
@@ -312,7 +334,8 @@ func (m *meross) getEndpoint(code string) *endpoint {
 // ---------------------------
 
 // base.post constructs and sends a POST request to a Meross hub and returns rawStatus for GET.
-func (b *base) post(host string, method string, namespace string, payload string, key string, timeout uint) (*rawStatus, error) {
+// If payloadName is empty, it is derived from the last segment of namespace converted to lowercase.
+func (b *base) post(host string, method string, namespace string, payload string, key string, timeout uint, payloadName string) (*rawStatus, error) {
 	client := &http.Client{
 		Timeout: time.Duration(timeout) * time.Millisecond,
 	}
@@ -320,8 +343,13 @@ func (b *base) post(host string, method string, namespace string, payload string
 	messageId := randomHex(16)
 	sign := md5SumString(fmt.Sprintf("%s%s%d", messageId, key, 0))
 
-	payloadName := strings.Split(namespace, ".")
-	wrappedPayload := fmt.Sprintf("{\"%s\":[%s]}", payloadName[len(payloadName)-1], payload)
+	if payloadName == "" {
+		parts := strings.Split(namespace, ".")
+		if len(parts) > 0 {
+			payloadName = strings.ToLower(parts[len(parts)-1])
+		}
+	}
+	wrappedPayload := fmt.Sprintf("{\"%s\":[%s]}", payloadName, payload)
 	jsonPayload := []byte(fmt.Sprintf(b.BaseTemplate, messageId, method, namespace, sign, wrappedPayload))
 
 	req, err := http.NewRequest("POST", "http://"+host+"/config", bytes.NewReader(jsonPayload))
@@ -361,9 +389,9 @@ func (b *base) post(host string, method string, namespace string, payload string
 	return &rawResponse, nil
 }
 
-// meross.post calls through to base.post.
-func (m *meross) post(method string, namespace string, payload string) (*rawStatus, error) {
-	return m.Base.post(m.Host, method, namespace, payload, m.Key, m.Timeout)
+// meross.post calls through to base.post with optional payloadName override.
+func (m *meross) post(method string, namespace string, payload string, payloadName string) (*rawStatus, error) {
+	return m.Base.post(m.Host, method, namespace, payload, m.Key, m.Timeout, payloadName)
 }
 
 // buildPayload builds a payload for the IDs contained in a device using a two-placeholder template (id,value).
@@ -378,11 +406,34 @@ func (m *meross) buildPayload(template string, value json.Number) string {
 	return payload.String()
 }
 
-// ---------------------------
-// Single-device HTTP handler
-// ---------------------------
+// buildIdsPayload builds a payload of id-only objects for schedule GET requests.
+func (m meross) buildIdsPayload() string {
+	var payload strings.Builder
+	for i, id := range m.Ids {
+		payload.WriteString(fmt.Sprintf("{\"id\":\"%s\"}", id))
+		if i < len(m.Ids)-1 {
+			payload.WriteString(",")
+		}
+	}
+	return payload.String()
+}
 
-// handler is the HTTP handler for a single radiator device.
+// matchPreset compares a decoded schedule map (without id) to a list of presets and
+// returns the matching preset name or empty string if none match.
+func matchPreset(copyMap map[string]any, presets []schedulePreset) string {
+	bytes, _ := json.Marshal(copyMap)
+	var actualMap map[string]any
+	_ = json.Unmarshal(bytes, &actualMap)
+	for _, preset := range presets {
+		var expectedMap map[string]any
+		_ = json.Unmarshal([]byte("{"+string(preset.toPayload())+"}"), &expectedMap)
+		if reflect.DeepEqual(actualMap, expectedMap) {
+			return preset.Name
+		}
+	}
+	return ""
+}
+
 func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	var jsonResponse []byte
 	var httpCode int

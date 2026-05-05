@@ -34,6 +34,8 @@ func (b *base) wireHandlers() {
 			ep.Handler = AdjustHandler{Min: -32767, Max: 32767} // typical TRV target range
 		case "boost":
 			ep.Handler = BoostHandler{Base: b}
+		case "schedule":
+			ep.Handler = ScheduleHandler{}
 		case "heatTemp":
 			ep.Handler = HeatTempHandler{Min: 50, Max: 350}
 		default:
@@ -133,6 +135,187 @@ func AddHeatingOverrides(targets []string, expires time.Time) error {
 	return writeHeatingOverrides(targets, expires)
 }
 
+func (m *meross) scheduleNames() []string {
+	if m == nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(m.Schedules))
+	for _, preset := range m.Schedules {
+		if preset.Name != "" {
+			names = append(names, preset.Name)
+		}
+	}
+
+	return names
+}
+
+func (m *meross) schedulePreset(name string) *schedulePreset {
+	for i := range m.Schedules {
+		if m.Schedules[i].Name == name {
+			return &m.Schedules[i]
+		}
+	}
+
+	return nil
+}
+
+func (p schedulePreset) toPayload() json.Number {
+	var b strings.Builder
+
+	writeField := func(name string, v any, first *bool) {
+		if !*first {
+			b.WriteByte(',')
+		}
+		*first = false
+
+		b.WriteString(`"`)
+		b.WriteString(name)
+		b.WriteString(`":`)
+
+		encoded, _ := json.Marshal(v) // ensures valid JSON
+		b.Write(encoded)
+	}
+
+	first := true
+
+	writeField("mon", p.Mon, &first)
+	writeField("tue", p.Tue, &first)
+	writeField("wed", p.Wed, &first)
+	writeField("thu", p.Thu, &first)
+	writeField("fri", p.Fri, &first)
+	writeField("sat", p.Sat, &first)
+	writeField("sun", p.Sun, &first)
+
+	return json.Number(b.String())
+}
+
+func commonScheduleNames(devices []*meross) []string {
+	if len(devices) == 0 {
+		return nil
+	}
+
+	counts := map[string]int{}
+	order := make([]string, 0)
+	for idx, dev := range devices {
+		seen := map[string]struct{}{}
+		for _, preset := range dev.Schedules {
+			if preset.Name == "" {
+				continue
+			}
+			if _, ok := seen[preset.Name]; ok {
+				continue
+			}
+			seen[preset.Name] = struct{}{}
+			counts[preset.Name]++
+			if idx == 0 {
+				order = append(order, preset.Name)
+			}
+		}
+	}
+
+	common := make([]string, 0)
+	for _, name := range order {
+		if counts[name] == len(devices) {
+			common = append(common, name)
+		}
+	}
+
+	return common
+}
+
+// ScheduleHandler lists configured schedule presets and applies them when selected.
+type ScheduleHandler struct {
+	Base *base
+}
+
+func (h ScheduleHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
+	req := CodeValueRequest{}
+	if err := decodeRequest(r, &req); err != nil {
+		return nil, err
+	}
+
+	if req.Value == "" {
+		return m.scheduleNames(), nil
+	}
+
+	ep := m.getEndpoint("schedule")
+	if ep == nil {
+		return nil, fmt.Errorf("invalid code")
+	}
+
+	preset := m.schedulePreset(string(req.Value))
+	if preset == nil {
+		return nil, fmt.Errorf("invalid value (unknown schedule)")
+	}
+
+	payload := m.buildPayload(ep.Template, preset.toPayload())
+
+	if _, err := m.post("SET", ep.Namespace, string(payload), ep.PayloadName); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
+func (h ScheduleHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (any, error) {
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("invalid code")
+	}
+
+	req := CodeValueRequest{}
+	if err := decodeRequest(r, &req); err != nil {
+		return nil, err
+	}
+
+	if req.Value == "" {
+		return commonScheduleNames(devices), nil
+	}
+
+	m0 := devices[0]
+
+	// validate preset exists on all devices
+	for _, dev := range devices {
+		ep := dev.getEndpoint("schedule")
+		if ep == nil {
+			return nil, fmt.Errorf("invalid code")
+		}
+		if dev.schedulePreset(string(req.Value)) == nil {
+			return nil, fmt.Errorf("invalid value (unknown schedule)")
+		}
+	}
+
+	// build a single payload for all unique target ids, using each device's own preset
+	ep := m0.getEndpoint("schedule")
+	if ep == nil {
+		return nil, fmt.Errorf("invalid code")
+	}
+
+	var payloadBuilder strings.Builder
+	first := true
+	for _, dev := range devices {
+		preset := dev.schedulePreset(string(req.Value))
+		if preset == nil {
+			return nil, fmt.Errorf("invalid value (unknown schedule)")
+		}
+		for _, id := range dev.Ids {
+			if !first {
+				payloadBuilder.WriteString(",")
+			}
+			first = false
+			payloadBuilder.WriteString(fmt.Sprintf(ep.Template, id, string(preset.toPayload())))
+		}
+	}
+
+	payload := payloadBuilder.String()
+
+	if _, err := b.post(m0.Host, "SET", ep.Namespace, payload, m0.Key, m0.Timeout, ep.PayloadName); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 // StatusHandler: GET-only, returns flattened status.
 type StatusHandler struct{}
 
@@ -143,9 +326,25 @@ func (h StatusHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 	}
 
 	payload := m.buildPayload(ep.Template, toJsonNumber(0))
-	raw, err := m.post("GET", ep.Namespace, payload)
+	raw, err := m.post("GET", ep.Namespace, payload, "")
 	if err != nil {
 		return nil, err
+	}
+
+	// also fetch schedules for the ids and compare to configured presets
+	scheduleEp := m.getEndpoint("schedule")
+	var scheduleMap map[string]map[string]any
+	if scheduleEp != nil {
+		idsPayload := meross{Ids: m.Ids}.buildIdsPayload()
+		schedRaw, err := m.post("GET", scheduleEp.Namespace, idsPayload, scheduleEp.PayloadName)
+		if err == nil && schedRaw != nil && len(schedRaw.Payload.Schedule) > 0 {
+			scheduleMap = map[string]map[string]any{}
+			for _, item := range schedRaw.Payload.Schedule {
+				if idv, ok := item["id"].(string); ok {
+					scheduleMap[idv] = item
+				}
+			}
+		}
 	}
 
 	deviceStates := raw.Payload.All
@@ -179,6 +378,28 @@ func (h StatusHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 				OpenWindow: &openWindow,
 				Boost:      boostVal,
 			},
+			Schedule: func() *string {
+				if scheduleMap != nil {
+					if s, ok := scheduleMap[deviceStates[i].ID]; ok {
+						// compare s (map) to configured schedules
+						// make a copy without id to avoid mutating scheduleMap
+						copyMap := map[string]any{}
+						for k, v := range s {
+							if k == "id" {
+								continue
+							}
+							copyMap[k] = v
+						}
+						if name := matchPreset(copyMap, m.Schedules); name != "" {
+							v := name
+							return &v
+						}
+						unknown := "unknown"
+						return &unknown
+					}
+				}
+				return nil
+			}(),
 		})
 	}
 
@@ -200,7 +421,24 @@ func (h StatusHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 		}
 	}
 
-	raw, err := b.post(m0.Host, "GET", ep.Namespace, payload.String(), m0.Key, m0.Timeout)
+	// fetch schedules for all target ids so we can annotate status with matching schedule name
+	var scheduleMap map[string]map[string]any
+	scheduleEp := m0.getEndpoint("schedule")
+	if scheduleEp != nil {
+		ids := collectTargets(devices)
+		idsPayload := meross{Ids: ids}.buildIdsPayload()
+		schedRaw, err := b.post(m0.Host, "GET", scheduleEp.Namespace, idsPayload, m0.Key, m0.Timeout, scheduleEp.PayloadName)
+		if err == nil && schedRaw != nil && len(schedRaw.Payload.Schedule) > 0 {
+			scheduleMap = map[string]map[string]any{}
+			for _, item := range schedRaw.Payload.Schedule {
+				if idv, ok := item["id"].(string); ok {
+					scheduleMap[idv] = item
+				}
+			}
+		}
+	}
+
+	raw, err := b.post(m0.Host, "GET", ep.Namespace, payload.String(), m0.Key, m0.Timeout, "")
 	if err != nil {
 		return nil, err
 	}
@@ -247,6 +485,28 @@ func (h StatusHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 						Boost:      boostVal,
 					}
 				}(),
+				Schedule: func() *string {
+					if scheduleMap != nil {
+						if s, ok := scheduleMap[deviceStates[i].ID]; ok {
+							// compare s (map) to configured schedules for this device
+							copyMap := map[string]any{}
+							for k, v := range s {
+								if k == "id" {
+									continue
+								}
+								copyMap[k] = v
+							}
+							if dev != nil {
+								if name := matchPreset(copyMap, dev.Schedules); name != "" {
+									return &name
+								}
+							}
+							unknown := "unknown"
+							return &unknown
+						}
+					}
+					return nil
+				}(),
 			},
 		})
 	}
@@ -265,7 +525,7 @@ func (h BatteryHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 	}
 
 	payload := m.buildPayload(ep.Template, toJsonNumber(0))
-	raw, err := m.post("GET", ep.Namespace, payload)
+	raw, err := m.post("GET", ep.Namespace, payload, "")
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +556,7 @@ func (h BatteryHandler) HandleMulti(b *base, devices []*meross, r *http.Request)
 		}
 	}
 
-	raw, err := b.post(m0.Host, "GET", ep.Namespace, payload.String(), m0.Key, m0.Timeout)
+	raw, err := b.post(m0.Host, "GET", ep.Namespace, payload.String(), m0.Key, m0.Timeout, "")
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +612,7 @@ func (h ToggleHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 		// GET status for this device and invert first id's onoff.
 		statusEp := m.getEndpoint("status")
 		payload := m.buildPayload(statusEp.Template, toJsonNumber(0))
-		raw, err := m.post("GET", statusEp.Namespace, payload)
+		raw, err := m.post("GET", statusEp.Namespace, payload, "")
 		if err != nil {
 			return nil, err
 		}
@@ -361,7 +621,7 @@ func (h ToggleHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 
 	toggleEp := m.getEndpoint("toggle")
 	payload := m.buildPayload(toggleEp.Template, val)
-	if _, err := m.post("SET", toggleEp.Namespace, payload); err != nil {
+	if _, err := m.post("SET", toggleEp.Namespace, payload, ""); err != nil {
 		return nil, err
 	}
 	return nil, nil
@@ -392,7 +652,7 @@ func (h ToggleHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 			}
 		}
 
-		raw, err := b.post(m0.Host, "GET", statusEp.Namespace, payload.String(), m0.Key, m0.Timeout)
+		raw, err := b.post(m0.Host, "GET", statusEp.Namespace, payload.String(), m0.Key, m0.Timeout, "")
 		if err != nil {
 			return nil, err
 		}
@@ -418,7 +678,7 @@ func (h ToggleHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 		}
 	}
 
-	if _, err := b.post(m0.Host, "SET", toggleEp.Namespace, payload.String(), m0.Key, m0.Timeout); err != nil {
+	if _, err := b.post(m0.Host, "SET", toggleEp.Namespace, payload.String(), m0.Key, m0.Timeout, ""); err != nil {
 		return nil, err
 	}
 
@@ -465,7 +725,7 @@ func (h ModeHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 	}
 
 	payload := m.buildPayload(ep.Template, val)
-	raw, err := m.post(method, ep.Namespace, payload)
+	raw, err := m.post(method, ep.Namespace, payload, "")
 	if err != nil {
 		return nil, err
 	}
@@ -515,7 +775,7 @@ func (h ModeHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (a
 		}
 	}
 
-	raw, err := b.post(m0.Host, method, ep.Namespace, payload.String(), m0.Key, m0.Timeout)
+	raw, err := b.post(m0.Host, method, ep.Namespace, payload.String(), m0.Key, m0.Timeout, "")
 	if err != nil {
 		return nil, err
 	}
@@ -592,7 +852,7 @@ func (h HeatTempHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 	}
 
 	payload := m.buildPayload(ep.Template, val)
-	raw, err := m.post(method, ep.Namespace, payload)
+	raw, err := m.post(method, ep.Namespace, payload, "")
 	if err != nil {
 		return nil, err
 	}
@@ -643,7 +903,7 @@ func (h HeatTempHandler) HandleMulti(b *base, devices []*meross, r *http.Request
 		}
 	}
 
-	raw, err := b.post(m0.Host, method, ep.Namespace, payload.String(), m0.Key, m0.Timeout)
+	raw, err := b.post(m0.Host, method, ep.Namespace, payload.String(), m0.Key, m0.Timeout, "")
 	if err != nil {
 		return nil, err
 	}
@@ -707,7 +967,7 @@ func (h AdjustHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 	}
 
 	payload := m.buildPayload(ep.Template, val)
-	raw, err := m.post(method, ep.Namespace, payload)
+	raw, err := m.post(method, ep.Namespace, payload, "")
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +1017,7 @@ func (h AdjustHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 		}
 	}
 
-	raw, err := b.post(m0.Host, method, ep.Namespace, payload.String(), m0.Key, m0.Timeout)
+	raw, err := b.post(m0.Host, method, ep.Namespace, payload.String(), m0.Key, m0.Timeout, "")
 	if err != nil {
 		return nil, err
 	}
@@ -822,7 +1082,7 @@ func (h BoostHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 	}
 
 	payload := m.buildPayload(ep.Template, toJsonNumber(4))
-	if _, err := m.post("SET", ep.Namespace, payload); err != nil {
+	if _, err := m.post("SET", ep.Namespace, payload, ""); err != nil {
 		return nil, err
 	}
 
@@ -859,7 +1119,7 @@ func (h BoostHandler) HandleMulti(b *base, devices []*meross, r *http.Request) (
 		}
 	}
 
-	if _, err := b.post(m0.Host, "SET", ep.Namespace, payload.String(), m0.Key, m0.Timeout); err != nil {
+	if _, err := b.post(m0.Host, "SET", ep.Namespace, payload.String(), m0.Key, m0.Timeout, ""); err != nil {
 		return nil, err
 	}
 
@@ -952,7 +1212,7 @@ func (h BoostHandler) revertExpiredHeatingOverridesMode3(ids []string) error {
 			}
 		}
 
-		if _, err := h.Base.post(dev.Host, "SET", ep.Namespace, payload.String(), dev.Key, dev.Timeout); err != nil {
+		if _, err := h.Base.post(dev.Host, "SET", ep.Namespace, payload.String(), dev.Key, dev.Timeout, ""); err != nil {
 			return err
 		}
 	}
