@@ -45,21 +45,21 @@ func main() {
 	}
 
 	frigate := &frigate.Device{}
-	listeners, err := frigate.Listeners(&configMap)
+	_, err = frigate.Listeners(&configMap)
 	if err != nil {
 		logging.Log(logging.Info, err.Error())
 		os.Exit(1)
 	}
 
 	thermostat := &thermostat.Device{}
-	listeners2, err := thermostat.Listeners(&configMap)
+	_, err = thermostat.Listeners(&configMap)
 	if err != nil {
 		logging.Log(logging.Info, err.Error())
 		os.Exit(1)
 	}
 
-	if len(routes) == 0 && len(listeners) == 0 && len(listeners2) == 0 {
-		logging.Log(logging.Error, "No devices or listeners provided, nothing left to do")
+	if len(routes) == 0 {
+		logging.Log(logging.Error, "No routes provided, nothing left to do")
 		os.Exit(1)
 	}
 

@@ -111,6 +111,18 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 	base := base{}
 	base.RadiatorMap = map[string]string{}
 	bthomeDevices := map[string]struct{}{}
+	seenThermostat := false
+
+	for _, d := range config.Devices {
+		if d.Type == "thermostat" {
+			seenThermostat = true
+			break
+		}
+	}
+
+	if !seenThermostat {
+		return nil, []listener{}, nil
+	}
 
 	// Build map of radiator IDs to names for meross_radiator devices
 	for _, d := range config.Devices {

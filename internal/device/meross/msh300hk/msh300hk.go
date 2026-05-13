@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kennedn/restate-go/internal/common/config"
@@ -209,6 +210,9 @@ type base struct {
 	Devices      []*meross
 }
 
+// msh300hkRequestMu serializes outbound requests made through this package.
+var msh300hkRequestMu sync.Mutex
+
 type Device struct{}
 
 // Routes generates routes for Meross device control based on a provided configuration.
@@ -382,6 +386,9 @@ func (m *meross) getEndpoint(code string) *endpoint {
 // base.post constructs and sends a POST request to a Meross hub and returns rawStatus for GET.
 // If payloadName is empty, it is derived from the last segment of namespace converted to lowercase.
 func (b *base) post(host string, method string, namespace string, payload string, key string, timeout uint, payloadName string) (*rawStatus, error) {
+	msh300hkRequestMu.Lock()
+	defer msh300hkRequestMu.Unlock()
+
 	client := &http.Client{
 		Timeout: time.Duration(timeout) * time.Millisecond,
 	}

@@ -123,7 +123,7 @@ func TestListeners(t *testing.T) {
 			name:          "empty_yaml_config",
 			configPath:    "testdata/frigateConfig/empty_yaml_config.yaml",
 			listenerCount: 0,
-			expectedError: errors.New(""),
+			expectedError: nil,
 		},
 		{
 			name:          "missing_config",
@@ -160,7 +160,11 @@ func TestListeners(t *testing.T) {
 
 			_, l, err := listeners(&configMap, &mockMqtt.Client{})
 
-			assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
+			if tc.expectedError == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.IsType(t, tc.expectedError, err, "Error should be of type \"%T\", got \"%T (%v)\"", tc.expectedError, err, err)
+			}
 
 			if len(l) != tc.listenerCount {
 				t.Fatalf("Wrong number of routes returned, Expected: %d, Got: %d", tc.listenerCount, len(l))
@@ -203,7 +207,7 @@ func TestListen(t *testing.T) {
 			mqttPayload:          []byte(`{"type":"new","before":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"},"after":{"camera":"front_garden","data":{"audio":[],"detections":["1723938588.335444-ctmuov"],"objects":["person"],"sub_labels":[],"zones":["front_enterance"]},"end_time":1723938593.734983,"id":"1723938590.336533-y0wa6z","severity":"alert","start_time":1723938590.336533,"thumb_path":"/media/frigate/clips/review/thumb-front_garden-1723938590.336533-y0wa6z.webp"}}`),
 			expectedRequest:      alert.Request{},
 			expectedBaseUrl:      "/api/events/1723938588.335444-ctmuov",
-			expectedError:        errors.New("no listeners found in config"),
+			expectedError:        nil,
 			expectedAlertHit:     0,
 			expectedThumbnailHit: 0,
 		},
@@ -322,6 +326,13 @@ func TestListen(t *testing.T) {
 				_, ls, err := listeners(&configMap, mockClient)
 				if err != nil {
 					testError = err
+					return
+				}
+				if len(ls) == 0 {
+					if tc.expectedAlertHit == 0 && tc.expectedThumbnailHit == 0 {
+						return
+					}
+					testError = errors.New("no listeners created")
 					return
 				}
 

@@ -159,12 +159,14 @@ func (d *Device) Listeners(config *config.Config) ([]listener, error) {
 func listeners(config *config.Config, client mqtt.Client) (*base, []listener, error) {
 	listeners := []listener{}
 	base := base{}
+	matchedFrigateDevice := false
 
 	// Iterate through each device in the configuration
 	for _, d := range config.Devices {
 		if d.Type != "frigate" {
 			continue
 		}
+		matchedFrigateDevice = true
 
 		listenerConfig := listenerConfig{}
 		listener := listener{
@@ -233,6 +235,9 @@ func listeners(config *config.Config, client mqtt.Client) (*base, []listener, er
 
 	// Check if any listeners were created
 	if len(listeners) == 0 {
+		if !matchedFrigateDevice {
+			return nil, []listener{}, nil
+		}
 		return nil, []listener{}, errors.New("no listeners found in config")
 	}
 
