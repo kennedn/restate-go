@@ -48,13 +48,6 @@ func (b *base) wireHandlers() {
 // Endpoint Handlers (bespoke validation here)
 // ---------------------------
 
-// CodeValueRequest is the generic request shape for endpoints that accept an optional value.
-type CodeValueRequest struct {
-	Code  string      `json:"code" schema:"code"`
-	Value json.Number `json:"value,omitempty" schema:"value"`
-	Hosts string      `json:"hosts,omitempty" schema:"hosts"`
-}
-
 var heatingOverridesPath = "/tmp/state/heating-overrides.json"
 var heatingOverridesMu sync.Mutex
 
@@ -586,7 +579,7 @@ func (h BatteryHandler) HandleMulti(b *base, devices []*meross, r *http.Request)
 // Validation is bespoke here.
 type ToggleHandler struct{}
 
-func (h ToggleHandler) validateValue(v json.Number) (json.Number, error) {
+func (h ToggleHandler) validateValue(v StringNumber) (json.Number, error) {
 	if v == "" {
 		return "", nil
 	}
@@ -594,7 +587,7 @@ func (h ToggleHandler) validateValue(v json.Number) (json.Number, error) {
 	if err != nil || (i != 0 && i != 1) {
 		return "", fmt.Errorf("invalid value (expected 0 or 1)")
 	}
-	return v, nil
+	return toJsonNumber(i), nil
 }
 
 func (h ToggleHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
@@ -691,7 +684,7 @@ type ModeHandler struct {
 	Max int64
 }
 
-func (h ModeHandler) validate(v json.Number) (json.Number, error) {
+func (h ModeHandler) validate(v StringNumber) (json.Number, error) {
 	if v == "" {
 		return "", nil
 	}
@@ -699,7 +692,7 @@ func (h ModeHandler) validate(v json.Number) (json.Number, error) {
 	if err != nil || i < h.Min || i > h.Max {
 		return "", fmt.Errorf("invalid value (min %d, max %d)", h.Min, h.Max)
 	}
-	return v, nil
+	return toJsonNumber(i), nil
 }
 
 func (h ModeHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
@@ -817,7 +810,7 @@ type HeatTempHandler struct {
 	Max int64
 }
 
-func (h HeatTempHandler) validate(v json.Number) (json.Number, error) {
+func (h HeatTempHandler) validate(v StringNumber) (json.Number, error) {
 	// heatTemp must be supplied for SET operations; do not treat empty as GET.
 	if v == "" {
 		return "", fmt.Errorf("invalid value (expected temperature)")
@@ -826,7 +819,7 @@ func (h HeatTempHandler) validate(v json.Number) (json.Number, error) {
 	if err != nil || i < h.Min || i > h.Max {
 		return "", fmt.Errorf("invalid value (min %d, max %d)", h.Min, h.Max)
 	}
-	return v, nil
+	return toJsonNumber(i), nil
 }
 
 func (h HeatTempHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
@@ -933,7 +926,7 @@ func (h HeatTempHandler) HandleMulti(b *base, devices []*meross, r *http.Request
 	return out, nil
 }
 
-func (h AdjustHandler) validate(v json.Number) (json.Number, error) {
+func (h AdjustHandler) validate(v StringNumber) (json.Number, error) {
 	if v == "" {
 		return "", nil
 	}
@@ -941,7 +934,7 @@ func (h AdjustHandler) validate(v json.Number) (json.Number, error) {
 	if err != nil || i < h.Min || i > h.Max {
 		return "", fmt.Errorf("invalid value (min %d, max %d)", h.Min, h.Max)
 	}
-	return v, nil
+	return toJsonNumber(i), nil
 }
 
 func (h AdjustHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
@@ -1052,7 +1045,7 @@ type BoostHandler struct {
 	Base *base
 }
 
-func (h BoostHandler) validate(v json.Number) (time.Duration, error) {
+func (h BoostHandler) validate(v StringNumber) (time.Duration, error) {
 	if v == "" {
 		return 0, fmt.Errorf("invalid value (expected hours)")
 	}

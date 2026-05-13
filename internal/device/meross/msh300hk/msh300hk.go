@@ -32,6 +32,52 @@ var defaultInternalConfig []byte
 // Models / DTOs
 // ---------------------------
 
+type StringNumber string
+
+func (v *StringNumber) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*v = StringNumber(s)
+		return nil
+	}
+
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err == nil {
+		*v = StringNumber(n.String())
+		return nil
+	}
+
+	return fmt.Errorf("expected string or number, got %s", string(b))
+}
+
+func (v *StringNumber) UnmarshalText(b []byte) error {
+	*v = StringNumber(string(b))
+	return nil
+}
+
+func (v StringNumber) String() string {
+	return string(v)
+}
+
+func (v StringNumber) Number() json.Number {
+	return json.Number(v)
+}
+
+func (v StringNumber) Int64() (int64, error) {
+	return json.Number(v).Int64()
+}
+
+func (v StringNumber) Float64() (float64, error) {
+	return json.Number(v).Float64()
+}
+
+// CodeValueRequest is the generic request shape for endpoints that accept an optional value.
+type CodeValueRequest struct {
+	Code  string       `json:"code" schema:"code"`
+	Value StringNumber `json:"value,omitempty" schema:"value"`
+	Hosts string       `json:"hosts,omitempty" schema:"hosts"`
+}
+
 // statusGet is a cut down representation of the state of a Meross device.
 // Must be pointers to distinguish between unset and 0 value with omitempty.
 type statusGet struct {
@@ -456,7 +502,7 @@ func (m *meross) handler(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Decode only to route (device.Request now only includes Code/Hosts).
-	baseReq := device.Request{}
+	baseReq := CodeValueRequest{}
 	if err := decodeRequest(r, &baseReq); err != nil {
 		msg := "Malformed Or Empty JSON Body"
 		if r.Header.Get("Content-Type") != "application/json" {
@@ -547,7 +593,7 @@ func (b *base) handler(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	// Decode only to route.
-	baseReq := device.Request{}
+	baseReq := CodeValueRequest{}
 	if err := decodeRequest(r, &baseReq); err != nil {
 		msg := "Malformed Or Empty JSON Body"
 		if r.Header.Get("Content-Type") != "application/json" {
