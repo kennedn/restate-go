@@ -1,6 +1,6 @@
 // matter-occupancy-light is an experimental Matter subscription consumer. It
 // restores restate-go's existing controller material, subscribes to the
-// Occupancy attribute, and mirrors changes to a Meross HTTP endpoint.
+// Occupancy attribute, and mirrors reports to a Meross HTTP endpoint.
 package main
 
 import (
@@ -145,8 +145,6 @@ func runSubscription(ctx context.Context, opts options) error {
 	log.Printf("sent subscription request for endpoint %d OccupancySensing.Occupancy (min=%ds max=%ds)", opts.endpoint, opts.minInterval, opts.maxInterval)
 
 	httpClient := &http.Client{Timeout: 10 * time.Second}
-	var previous uint64
-	havePrevious := false
 	initialReport := true
 	setupDeadline := time.Now().Add(10 * time.Second)
 	setupResponseSeen := false
@@ -189,24 +187,11 @@ func runSubscription(ctx context.Context, opts options) error {
 				continue
 			}
 			occupancy &= 1 // Occupancy is a bitmap; bit 0 is the occupied state.
-			if !havePrevious {
-				if err := postOccupancy(ctx, httpClient, opts.merossURL, occupancy); err != nil {
-					log.Printf("initial occupancy sync=%d: %v", occupancy, err)
-					continue
-				}
-				previous, havePrevious = occupancy, true
-				log.Printf("initial occupancy=%d; Meross state synchronized", occupancy)
-				continue
-			}
-			if occupancy == previous {
-				continue
-			}
-			previous = occupancy
 			if err := postOccupancy(ctx, httpClient, opts.merossURL, occupancy); err != nil {
-				log.Printf("mirror occupancy=%d: %v", occupancy, err)
+				log.Printf("synchronize occupancy=%d: %v", occupancy, err)
 				continue
 			}
-			log.Printf("occupancy changed to %d; Meross state updated", occupancy)
+			log.Printf("occupancy=%d; Meross state synchronized", occupancy)
 		case gomat.INTERACTION_OPCODE_STATUS_RSP:
 			// Status responses are expected during subscription setup/acknowledgment.
 		default:

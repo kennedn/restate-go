@@ -8,12 +8,17 @@ configured IPv4 address, and subscribes to:
 endpoint 1 / OccupancySensing (0x0406) / Occupancy (0x0000)
 ```
 
-The first report immediately synchronizes the light. Each subsequent change
-sends the equivalent of:
+Every valid report, including the initial and periodic reports, synchronizes
+the light by sending the equivalent of:
 
 ```bash
 curl -X POST 'https://api.kennedn.com/v2/meross/office?code=toggle&value=${occupancy}'
 ```
+
+The experiment deliberately does not deduplicate occupancy values. Reasserting
+the state on each Matter report corrects the light if something else changes it
+between occupancy transitions. With the default maximum interval, this happens
+at least once every 30 seconds when the device honours the subscription.
 
 Run it from the repository root:
 
