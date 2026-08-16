@@ -1,0 +1,8 @@
+apiVersion: v2
+devices:
+  - type: matter
+    config:
+      name: office
+      timeoutMs: 1600
+      matterQR: 'MT:MFAA0Y.614-N4306200'
+      ip: 192.168.1.50

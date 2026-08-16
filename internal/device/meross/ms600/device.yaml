@@ -1,0 +1,4 @@
+# Matter-specific transport/state defaults. Capabilities and REST endpoints are
+# deliberately not declared here; they are discovered from the node at startup.
+stateRoot: /tmp/state/matter
+matterPort: 5540

@@ -12,6 +12,7 @@ import (
 	"github.com/kennedn/restate-go/internal/device/bthome"
 	"github.com/kennedn/restate-go/internal/device/common"
 	"github.com/kennedn/restate-go/internal/device/hikvision"
+	"github.com/kennedn/restate-go/internal/device/meross/ms600"
 	"github.com/kennedn/restate-go/internal/device/meross/msgeneric"
 	"github.com/kennedn/restate-go/internal/device/meross/msh300hk"
 	"github.com/kennedn/restate-go/internal/device/meross/mts200b"
@@ -34,6 +35,7 @@ var (
 		&alert.Device{},
 		&bins.Device{},
 		&msgeneric.Device{},
+		&ms600.Device{},
 		&mts200b.Device{},
 		&msh300hk.Device{},
 		&snowdon.Device{},
@@ -47,7 +49,17 @@ var (
 func (d *Devices) Routes(config *config.Config) ([]router.Route, error) {
 
 	for _, device := range devices {
-		tmpRoutes, _ := device.Routes(config)
+		tmpRoutes, err := device.Routes(config)
+		// Matter initializes a cryptographic controller and discovers its model at
+		// startup. If it was explicitly configured, silently dropping that error
+		// would leave a partially working API and hide commissioning failures.
+		if _, matterDevice := device.(*ms600.Device); matterDevice && err != nil {
+			for _, configured := range config.Devices {
+				if configured.Type == "matter" {
+					return nil, err
+				}
+			}
+		}
 
 		// Prepend API version to route paths
 		for i, r := range tmpRoutes {

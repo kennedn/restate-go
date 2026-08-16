@@ -9,6 +9,7 @@ require (
 	github.com/gorilla/schema v1.2.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/stretchr/testify v1.8.4
+	github.com/tom-code/gomat v0.0.0-20231210134906-5413b3e13054
 	golang.org/x/text v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -17,6 +18,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.3 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
+	golang.org/x/crypto v0.25.0 // indirect
 	golang.org/x/net v0.27.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
 )

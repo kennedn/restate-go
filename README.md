@@ -8,6 +8,7 @@ Currently supported devices and listeners:
 | --- | --- |
 | alert | Forward messages to [Pushover](https://pushover.net/api#messages). |
 | meross | Control Meross bulbs, sockets, switches, thermostats (MTS200B), and radiator valves (MSH300HK). |
+| matter | Commission and control Matter devices through dynamically discovered attributes and commands. |
 | snowdon | Control Snowdon II soundbars with the [Snowdon-II-wifi](https://github.com/kennedn/Snowdon-II-Wifi) mod. |
 | tvcom | Control LG5000 TVs over a [websocket serial bridge](https://github.com/kennedn/pico-ws-uart/). |
 |wol|Control Wake-On-Lan enabled devices, power state can be toggled on devices utilising [Action-On-LAN](https://github.com/kennedn/Action-On-LAN)|
@@ -84,6 +85,42 @@ Currently supported devices and listeners:
 | `host` | IP address of the hub. |
 | `key` | Optional Meross device key. |
 
+#### matter
+
+| Parameter | Description |
+| ------------- | ------------------------------------------------ |
+| `name` | Unique URL name for the Matter node. |
+| `ip` | Stable literal IPv4 locator. Operational mDNS is not used. |
+| `matterQR` | Matter QR payload (`MT:...`) used for the first commissioning. |
+| `timeoutMs` | Reserved communication timeout. The current `gomat` transport has a fixed three-second receive deadline. |
+
+Each configured node owns a fabric/controller identity under `/tmp/state/matter/<device>/`.
+The directory and private material are mode `0700` and `0600`, respectively. On the
+first start, the device must be commissionable. If another administrator such as
+`chip-tool` already owns it, use that administrator to open a commissioning window;
+restate-go creates and persists its own independent fabric rather than importing keys.
+
+Routes are derived from Descriptor and global cluster metadata at startup:
+
+```text
+GET  /api/v2/{device}/{cluster}/{attribute}
+POST /api/v2/{device}/{cluster}/commands/{command}
+```
+
+Names come from `gomat`'s generated Matter catalog, with numeric fallbacks for vendor
+IDs. If the same cluster/attribute or command occurs on multiple endpoints, all
+colliding paths gain a deterministic `{endpoint-id}/` prefix. Commands with no fields
+need no body. Commands with fields may pass their anonymous Matter payload as
+`{"tlvHex":"..."}` until typed command schemas are available.
+
+Descriptor and the reusable Identify, Groups, Scenes, FixedLabel, and UserLabel
+utility clusters are consumed during discovery but hidden from the public REST
+projection by default. Universal cluster metadata attributes are hidden as well.
+
+The current `gomat` release does not expose attribute access metadata or encode Matter
+WriteRequest messages, so discovered attributes are exposed read-only. Subscriptions
+are intentionally not enabled.
+
 #### snowdon
 
 | Parameter     | Description                                      |
@@ -147,6 +184,12 @@ Currently supported devices and listeners:
 ```yaml
 apiVersion: v2
 devices:
+- type: matter
+  config:
+    name: office
+    timeoutMs: 1600
+    matterQR: 'MT:MFAA0Y.614-N4306200'
+    ip: 192.168.1.50
 - type: meross
   config:
     name: "lamp"
