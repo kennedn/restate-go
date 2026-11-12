@@ -178,6 +178,81 @@ func TestWebsocketWriteWithResponse(t *testing.T) {
 	}
 }
 
+func TestWebsocketWriteWithResponseSerializesDeviceCommands(t *testing.T) {
+	connected := make(chan struct{}, 2)
+	release := make(chan struct{})
+	released := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+		connected <- struct{}{}
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read command: %v", err)
+			return
+		}
+		<-release
+		if err := conn.WriteMessage(websocket.TextMessage, []byte("a 00 OK01x")); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	// Release blocked handlers even when an assertion fails.
+	defer server.Close()
+	defer func() {
+		if !released {
+			close(release)
+		}
+	}()
+
+	device := &tvcom{Host: strings.TrimPrefix(server.URL, "http://"), Timeout: 2000}
+	first := opcode{Tvcom: device, Code: "ka"}
+	second := opcode{Tvcom: device, Code: "kc"}
+	results := make(chan error, 2)
+	go func() {
+		_, err := first.websocketWriteWithResponse("01")
+		results <- err
+	}()
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first command did not connect")
+	}
+
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		_, err := second.websocketWriteWithResponse("01")
+		results <- err
+	}()
+	<-started
+	select {
+	case <-connected:
+		t.Fatal("second command connected while the first was still waiting for its response")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	released = true
+	select {
+	case <-connected:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second command did not connect after the first completed")
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Errorf("command failed: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("command did not complete")
+		}
+	}
+}
+
 func TestRoutes(t *testing.T) {
 	logging.SetLogLevel(logging.Error)
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/kennedn/restate-go/internal/common/config"
@@ -36,6 +37,7 @@ type opcode struct {
 }
 
 type tvcom struct {
+	requestMu   sync.Mutex
 	Name        string `yaml:"name"`
 	Timeout     uint   `yaml:"timeoutMs"`
 	Host        string `yaml:"host"`
@@ -80,6 +82,10 @@ func (o *opcode) getDataCode(name string) string {
 // websocketWriteWithResponse sends a message over a WebSocket connection and waits for a response.
 // It returns the response or an error if the response is not received within the specified timeout.
 func (o *opcode) websocketWriteWithResponse(data string) ([]byte, error) {
+	// Serialize commands across all opcodes for this downstream device.
+	o.Tvcom.requestMu.Lock()
+	defer o.Tvcom.requestMu.Unlock()
+
 	conn, _, err := websocket.DefaultDialer.Dial("ws://"+o.Tvcom.Host, nil)
 	if err != nil {
 		return nil, err
