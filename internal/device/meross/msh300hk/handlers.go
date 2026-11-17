@@ -309,6 +309,30 @@ func (h ScheduleHandler) HandleMulti(b *base, devices []*meross, r *http.Request
 	return nil, nil
 }
 
+// batteryLevels fetches optional battery readings, keyed by subdevice ID.
+// A missing endpoint or unavailable reading should not prevent returning status.
+func (b *base) batteryLevels(devices []*meross) map[string]*int64 {
+	m := devices[0]
+	ep := m.getEndpoint("battery")
+	if ep == nil {
+		return nil
+	}
+	var payloads []string
+	for _, dev := range devices {
+		payloads = append(payloads, dev.buildPayload(ep.Template, toJsonNumber(0)))
+	}
+	raw, err := b.post(m.Host, "GET", ep.Namespace, strings.Join(payloads, ","), m.Key, m.Timeout, ep.PayloadName)
+	if err != nil || raw == nil {
+		return nil
+	}
+	levels := make(map[string]*int64)
+	for i := range raw.Payload.Battery {
+		reading := &raw.Payload.Battery[i]
+		levels[reading.ID] = &reading.Value
+	}
+	return levels
+}
+
 // StatusHandler: GET-only, returns flattened status.
 type StatusHandler struct{}
 
@@ -340,6 +364,7 @@ func (h StatusHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 		}
 	}
 
+	batteryLevels := m.Base.batteryLevels([]*meross{m})
 	deviceStates := raw.Payload.All
 	// read existing boost overrides (non-destructive)
 	heatingOverridesMu.Lock()
@@ -360,10 +385,11 @@ func (h StatusHandler) HandleSingle(m *meross, r *http.Request) (any, error) {
 			}
 		}
 		out = append(out, &statusGet{
-			Id:     &deviceStates[i].ID,
-			Onoff:  &deviceStates[i].Togglex.Onoff,
-			Mode:   &deviceStates[i].Mode.State,
-			Online: &deviceStates[i].Online.Status,
+			Battery: batteryLevels[deviceStates[i].ID],
+			Id:      &deviceStates[i].ID,
+			Onoff:   &deviceStates[i].Togglex.Onoff,
+			Mode:    &deviceStates[i].Mode.State,
+			Online:  &deviceStates[i].Online.Status,
 			Temperature: &temperature{
 				Current:    &deviceStates[i].Temperature.Room,
 				Target:     &deviceStates[i].Temperature.CurrentSet,
@@ -436,6 +462,7 @@ func (h StatusHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 		return nil, err
 	}
 
+	batteryLevels := b.batteryLevels(devices)
 	deviceStates := raw.Payload.All
 	// read existing boost overrides (non-destructive)
 	heatingOverridesMu.Lock()
@@ -459,10 +486,11 @@ func (h StatusHandler) HandleMulti(b *base, devices []*meross, r *http.Request) 
 		out = append(out, &namedStatus{
 			Name: name,
 			Status: &statusGet{
-				Id:     &deviceStates[i].ID,
-				Onoff:  &deviceStates[i].Togglex.Onoff,
-				Mode:   &deviceStates[i].Mode.State,
-				Online: &deviceStates[i].Online.Status,
+				Battery: batteryLevels[deviceStates[i].ID],
+				Id:      &deviceStates[i].ID,
+				Onoff:   &deviceStates[i].Togglex.Onoff,
+				Mode:    &deviceStates[i].Mode.State,
+				Online:  &deviceStates[i].Online.Status,
 				Temperature: func() *temperature {
 					var boostVal *string = nil
 					if boostPayload.Boost != nil {

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kennedn/restate-go/internal/common/config"
@@ -51,6 +52,9 @@ type bthome struct {
 type base struct {
 	Devices []*bthome `yaml:"devices"`
 }
+
+// Bridge locks are shared by single-device and batch requests, including sensors on the same host.
+var bridgeLocks sync.Map
 
 type Device struct{}
 
@@ -128,6 +132,11 @@ func (m *bthome) websocketConnectWithResponse() (*StatusResponse, error) {
 // websocketWriteWithResponses connected to a websocket and filters received data based on a list of bthome devices
 // It returns an array of namedStatus or an error if the response is not received within the specified timeout.
 func (b *base) websocketConnectWithResponses(devices []*bthome) ([]*namedStatus, error) {
+	mu, _ := bridgeLocks.LoadOrStore(devices[0].Host, &sync.Mutex{})
+	requestMu := mu.(*sync.Mutex)
+	requestMu.Lock()
+	defer requestMu.Unlock()
+
 	macNames := map[string]string{}
 	deviceStrings := map[string]string{}
 	statusResponses := []*namedStatus{}

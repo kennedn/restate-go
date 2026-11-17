@@ -83,6 +83,7 @@ type CodeValueRequest struct {
 // Must be pointers to distinguish between unset and 0 value with omitempty.
 type statusGet struct {
 	Id          *string      `json:"id"`
+	Battery     *int64       `json:"battery,omitempty"`
 	Onoff       *int64       `json:"onoff,omitempty"`
 	Mode        *int64       `json:"mode,omitempty"`
 	Online      *int64       `json:"online,omitempty"`

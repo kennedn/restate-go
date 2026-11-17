@@ -5,11 +5,13 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -345,7 +347,7 @@ func TestHandlers(t *testing.T) {
 			url:          "/radiator/?code=status&hosts=rad1,rad2",
 			data:         []byte(`{"code":"status","hosts":"rad1,rad2"}`),
 			expectedCode: http.StatusOK,
-			expectedBody: `{"message":"OK","data":[{"name":"rad1","status":{"id":"dev1","onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}},{"name":"rad1","status":{"id":"dev2","onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}},{"name":"rad2","status":{"id":"dev3","onoff":0,"mode":1,"online":1,"temperature":{"current":190,"target":190,"heating":false,"openWindow":true}}}]}`,
+			expectedBody: `{"message":"OK","data":[{"name":"rad1","status":{"id":"dev1","battery":95,"onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}},{"name":"rad1","status":{"id":"dev2","battery":85,"onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}},{"name":"rad2","status":{"id":"dev3","battery":80,"onoff":0,"mode":1,"online":1,"temperature":{"current":190,"target":190,"heating":false,"openWindow":true}}}]}`,
 		},
 		{
 			name:         "status_success",
@@ -353,7 +355,7 @@ func TestHandlers(t *testing.T) {
 			url:          "/radiator/rad1?code=status",
 			data:         nil,
 			expectedCode: http.StatusOK,
-			expectedBody: `{"message":"OK","data":[{"id":"dev1","onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}]}`,
+			expectedBody: `{"message":"OK","data":[{"id":"dev1","battery":95,"onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}]}`,
 		},
 		{
 			name:         "battery_success",
@@ -377,7 +379,7 @@ func TestHandlers(t *testing.T) {
 			url:          "/radiator/rad1?code=status",
 			data:         nil,
 			expectedCode: http.StatusOK,
-			expectedBody: `{"message":"OK","data":[{"id":"dev1","onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}]}`,
+			expectedBody: `{"message":"OK","data":[{"id":"dev1","battery":95,"onoff":1,"mode":3,"online":1,"temperature":{"current":200,"target":220,"heating":true,"openWindow":false}}]}`,
 		},
 	}
 
@@ -725,6 +727,90 @@ func TestStatusIncludesScheduleSingle(t *testing.T) {
 		sch, ok := resp.Data[0]["schedule"].(string)
 		if assert.True(t, ok, "schedule field should be present and a string") {
 			assert.Equal(t, "study", sch)
+		}
+	}
+}
+
+func TestStatusBatteryReadings(t *testing.T) {
+	for _, multi := range []bool{false, true} {
+		for _, unavailable := range []bool{false, true} {
+			name := fmt.Sprintf("multi=%t/unavailable=%t", multi, unavailable)
+			t.Run(name, func(t *testing.T) {
+				var cfg config.Config
+				if err := yaml.Unmarshal([]byte(normalRadiatorConfig), &cfg); err != nil {
+					t.Fatal(err)
+				}
+				b, _, err := routes(&cfg, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var batteryRequested atomic.Bool
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var req struct {
+						Header struct {
+							Namespace string `json:"namespace"`
+						} `json:"header"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+						t.Error(err)
+						return
+					}
+					switch req.Header.Namespace {
+					case "Appliance.Hub.Battery":
+						batteryRequested.Store(true)
+						if unavailable {
+							http.Error(w, "unavailable", http.StatusServiceUnavailable)
+							return
+						}
+						// Deliberately reordered, with a zero reading and a missing ID.
+						io.WriteString(w, `{"payload":{"battery":[{"id":"dev3","value":73},{"id":"dev1","value":0}]}}`)
+					case "Appliance.Hub.Mts100.All":
+						io.WriteString(w, multiStatusResponse)
+					default:
+						io.WriteString(w, `{}`)
+					}
+				}))
+				defer server.Close()
+				for _, dev := range b.Devices {
+					dev.Host = strings.TrimPrefix(server.URL, "http://")
+				}
+				r := httptest.NewRequest(http.MethodPost, "/?code=status", nil)
+				var result any
+				if multi {
+					result, err = (StatusHandler{}).HandleMulti(b, b.Devices, r)
+				} else {
+					result, err = (StatusHandler{}).HandleSingle(b.Devices[0], r)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				assert.True(t, batteryRequested.Load())
+				data, err := json.Marshal(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var entries []map[string]any
+				if err := json.Unmarshal(data, &entries); err != nil {
+					t.Fatal(err)
+				}
+				assert.Len(t, entries, 3)
+				for _, entry := range entries {
+					if multi {
+						entry = entry["status"].(map[string]any)
+					}
+					value, present := entry["battery"]
+					if unavailable || entry["id"] == "dev2" {
+						assert.False(t, present)
+					} else {
+						assert.True(t, present)
+						expected := float64(0)
+						if entry["id"] == "dev3" {
+							expected = 73
+						}
+						assert.Equal(t, expected, value)
+					}
+				}
+			})
 		}
 	}
 }
