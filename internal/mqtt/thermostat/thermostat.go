@@ -48,6 +48,7 @@ type radiatorStatus struct {
 	CurrentSet *int64 `json:"currentSet"`
 	Room       *int64 `json:"room"`
 	OnOff      *int64 `json:"onoff"`
+	State      *int64 `json:"state"`
 	Id         string `json:"id"`
 }
 
@@ -59,6 +60,7 @@ type rawStatus struct {
 	Payload struct {
 		Temperature []radiatorStatus `json:"temperature"`
 		ToggleX     []radiatorStatus `json:"togglex"`
+		Mode        []radiatorStatus `json:"mode"`
 	} `json:"payload"`
 }
 

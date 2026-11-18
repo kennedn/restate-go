@@ -169,6 +169,11 @@ are intentionally not enabled.
 Prometheus metrics and a Grafana dashboard for radiator state history are described
 in [Thermostat MQTT metrics](docs/thermostat-metrics.md).
 
+Radiator mode is exported as `restate_thermostat_radiator_mode` from
+`Appliance.Hub.Mts100.Mode` messages (`payload.mode[].state`). Like temperature
+metrics, it appears after the first MQTT observation and retains its last value
+until another mode update or an application restart.
+
 | Parameter | Description |
 | ------------- | ------------------------------------------------ |
 | `name` | Unique identifier for the listener. |

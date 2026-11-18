@@ -14,6 +14,7 @@ type thermostatMetrics struct {
 	room         *prometheus.GaugeVec
 	target       *prometheus.GaugeVec
 	onoff        *prometheus.GaugeVec
+	mode         *prometheus.GaugeVec
 	heating      *prometheus.GaugeVec
 	lastSeen     *prometheus.GaugeVec
 	mu           sync.Mutex
@@ -51,11 +52,12 @@ func newThermostatMetrics(registerer prometheus.Registerer) *thermostatMetrics {
 		room:         gauge("radiator_room_temperature_celsius", "Latest reported radiator room temperature in degrees Celsius."),
 		target:       gauge("radiator_target_temperature_celsius", "Latest reported radiator target temperature in degrees Celsius."),
 		onoff:        gauge("radiator_on", "Latest reported radiator on/off state (1 on, 0 off)."),
+		mode:         gauge("radiator_mode", "Latest reported radiator mode code from MQTT."),
 		heating:      gauge("radiator_heat_demand", "Inferred radiator heat demand: 1 if latest target exceeds latest room temperature, otherwise 0; not a boiler or valve measurement."),
 		lastSeen:     gauge("radiator_last_message_timestamp_seconds", "Unix time of the latest MQTT state entry for this radiator."),
 		temperatures: make(map[radiatorMetricKey]observedTemperature),
 	}
-	registerer.MustRegister(m.messages, m.updates, m.room, m.target, m.onoff, m.heating, m.lastSeen)
+	registerer.MustRegister(m.messages, m.updates, m.room, m.target, m.onoff, m.mode, m.heating, m.lastSeen)
 	return m
 }
 
@@ -66,6 +68,8 @@ func (m *thermostatMetrics) observe(l *listener, status *rawStatus) {
 		entries = status.Payload.Temperature
 	case "Appliance.Hub.ToggleX":
 		entries = status.Payload.ToggleX
+	case "Appliance.Hub.Mts100.Mode":
+		entries = status.Payload.Mode
 	default:
 		return
 	}
@@ -76,7 +80,7 @@ func (m *thermostatMetrics) observe(l *listener, status *rawStatus) {
 	defer m.mu.Unlock()
 	for _, entry := range entries {
 		name, known := l.Base.RadiatorMap[entry.Id]
-		if !known || entry.Id == "" || (entry.Room == nil && entry.CurrentSet == nil && entry.OnOff == nil) {
+		if !known || entry.Id == "" || (entry.Room == nil && entry.CurrentSet == nil && entry.OnOff == nil && entry.State == nil) {
 			continue
 		}
 		labels := []string{l.Config.Name, name, entry.Id}
@@ -92,6 +96,9 @@ func (m *thermostatMetrics) observe(l *listener, status *rawStatus) {
 		}
 		if entry.OnOff != nil {
 			m.onoff.WithLabelValues(labels...).Set(float64(*entry.OnOff))
+		}
+		if entry.State != nil {
+			m.mode.WithLabelValues(labels...).Set(float64(*entry.State))
 		}
 		m.temperatures[key] = state
 		if state.room != nil && state.target != nil {

@@ -130,3 +130,57 @@ func TestMetricsConcurrentUpdatesAndScrapes(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, float64(200), value)
 }
+
+func TestSubscriptionCallbackModeMetrics(t *testing.T) {
+	registry := prometheus.NewPedanticRegistry()
+	metrics := newThermostatMetrics(registry)
+	l := &listener{
+		Config:  &listenerConfig{Name: "home"},
+		Base:    base{RadiatorMap: map[string]string{"a": "lounge", "b": "study"}},
+		metrics: metrics,
+	}
+	send := func(payload string) {
+		t.Helper()
+		l.subscriptionCallback(nil, &mockMqtt.Message{PayloadVar: []byte(payload)})
+	}
+	mode := func(id string, expected float64) {
+		t.Helper()
+		value, found := metricValue(t, registry, "restate_thermostat_radiator_mode", map[string]string{"listener": "home", "id": id})
+		require.True(t, found)
+		assert.Equal(t, expected, value)
+	}
+	// Record every entry, including custom mode 0; ignore unconfigured IDs.
+	send(`{"header":{"namespace":"Appliance.Hub.Mts100.Mode"},"payload":{"mode":[{"id":"a","state":0},{"id":"b","state":3},{"id":"unknown","state":4}]}}`)
+	mode("a", 0)
+	mode("b", 3)
+	_, found := metricValue(t, registry, "restate_thermostat_radiator_mode", map[string]string{"id": "unknown"})
+	assert.False(t, found)
+	_, found = metricValue(t, registry, "restate_thermostat_radiator_room_temperature_celsius", map[string]string{"id": "a"})
+	assert.False(t, found, "mode messages must not create temperature readings")
+	_, found = metricValue(t, registry, "restate_thermostat_radiator_heat_demand", map[string]string{"id": "a"})
+	assert.False(t, found, "mode alone must not create a heat demand reading")
+
+	send(`{"header":{"namespace":"Appliance.Hub.Mts100.Mode"},"payload":{"mode":[{"id":"a","state":4}]}}`)
+	mode("a", 4)
+	// An absent state must preserve the previous observation rather than setting 0.
+	send(`{"header":{"namespace":"Appliance.Hub.Mts100.Mode"},"payload":{"mode":[{"id":"a"}]}}`)
+	mode("a", 4)
+	value, found := metricValue(t, registry, "restate_thermostat_radiator_updates_total", map[string]string{"id": "a"})
+	require.True(t, found)
+	assert.Equal(t, float64(2), value)
+	_, found = metricValue(t, registry, "restate_thermostat_radiator_last_message_timestamp_seconds", map[string]string{"id": "b"})
+	assert.True(t, found)
+
+	// Other state updates must not clear the last reported mode.
+	room := int64(200)
+	status := rawStatus{}
+	status.Header.Namespace = "Appliance.Hub.Mts100.Temperature"
+	status.Payload.Temperature = []radiatorStatus{{Id: "a", Room: &room}}
+	metrics.observe(l, &status)
+	mode("a", 4)
+	mode("b", 3)
+
+	// Do not interpret a different namespace's state field as a TRV mode.
+	send(`{"header":{"namespace":"Appliance.Control.Thermostat.Unknown"},"payload":{"mode":[{"id":"a","state":1}]}}`)
+	mode("a", 4)
+}
