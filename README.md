@@ -166,6 +166,9 @@ are intentionally not enabled.
 
 #### thermostat listener
 
+Prometheus metrics and a Grafana dashboard for radiator state history are described
+in [Thermostat MQTT metrics](docs/thermostat-metrics.md).
+
 | Parameter | Description |
 | ------------- | ------------------------------------------------ |
 | `name` | Unique identifier for the listener. |

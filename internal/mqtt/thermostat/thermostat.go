@@ -64,8 +64,9 @@ type rawStatus struct {
 
 // Device represents an MQTT device that listens to messages and triggers alerts.
 type listener struct {
-	Base   base
-	Config *listenerConfig
+	Base    base
+	Config  *listenerConfig
+	metrics *thermostatMetrics
 }
 
 // Config represents the configuration for the MQTT alert device.
@@ -306,11 +307,18 @@ func (l *listener) startThermostatSyncStalenessCheck() {
 
 // subscriptionCallback is called when a message is received on the subscribed MQTT topic.
 func (l *listener) subscriptionCallback(_ mqtt.Client, message mqtt.Message) {
+	metrics := l.metrics
+	if metrics == nil {
+		metrics = defaultMetrics
+	}
 	status := rawStatus{}
 	if err := json.Unmarshal(message.Payload(), &status); err != nil {
+		metrics.messages.WithLabelValues(l.Config.Name, "invalid_json").Inc()
 		logging.Log(logging.Error, "Failed to unmarshal MQTT message: %v", err)
 		return
 	}
+	metrics.messages.WithLabelValues(l.Config.Name, "valid_json").Inc()
+	metrics.observe(l, &status)
 
 	// Extract radiatorStatus information safely
 	var radiatorStatus *radiatorStatus

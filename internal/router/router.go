@@ -6,11 +6,13 @@ import (
 
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func NewRouter(routes []router.Route) *mux.Router {
 
 	router := mux.NewRouter()
+	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
 
 	// Enable logging middleware
 	router.Use(logging.RequestLogger)

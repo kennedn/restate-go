@@ -1,0 +1,8 @@
+# Merge this job into your existing Prometheus scrape_configs.
+scrape_configs:
+  - job_name: restate-go
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      # Kubernetes Service in this repository; use localhost:8080 for a local app.
+      - targets: ['restate-go.default.svc.cluster.local:80']
